@@ -371,6 +371,29 @@ private struct UniqueJSONKeys {
         }
         while index < bytes.count && ![9, 10, 13, 32, 44, 93, 125].contains(bytes[index]) { index += 1 }
     }
+    mutating func objectMembers() throws -> [String: Range<Int>] {
+        whitespace(); guard index < bytes.count, bytes[index] == 123 else { throw PotetoError.projectState }
+        index += 1; whitespace(); var result: [String: Range<Int>] = [:]
+        if index < bytes.count && bytes[index] == 125 { index += 1; return result }
+        while true {
+            whitespace(); guard index < bytes.count, bytes[index] == 34 else { throw PotetoError.projectState }
+            let key = try string(); whitespace()
+            guard index < bytes.count, bytes[index] == 58 else { throw PotetoError.projectState }
+            index += 1; whitespace(); let start = index; try value(); result[key] = start..<index
+            whitespace(); guard index < bytes.count else { throw PotetoError.projectState }
+            let separator = bytes[index]; index += 1
+            if separator == 125 { return result }
+            guard separator == 44 else { throw PotetoError.projectState }
+        }
+    }
+    mutating func range(_ path: [String]) throws -> Range<Int> {
+        whitespace(); let start = index
+        guard let key = path.first else { try value(); return start..<index }
+        let members = try objectMembers()
+        guard let member = members[key] else { throw PotetoError.projectState }
+        index = member.lowerBound
+        return try range(Array(path.dropFirst()))
+    }
     mutating func validate() throws { try value(); whitespace(); guard index == bytes.count else { throw PotetoError.malformed } }
 }
 func activationObservation(_ root: [String: Any], serverTime: Date?) -> ActivationObservation? {
@@ -566,15 +589,33 @@ struct LocalProjectLayout {
             guard let value else { return [] }; guard let a = value as? [String] else { throw PotetoError.projectState }; return a
         }
         func ordered(_ a: [String], _ b: [String]) -> [String] {
-            var seen = Set<String>(); return (a + b).filter { seen.insert($0).inserted }
+            var seen = Set(a); return a + b.filter { seen.insert($0).inserted }
         }
-        let order = try strings(source["project-order"])
-        guard order.allSatisfy({ s.projects[$0] != nil }) else { throw PotetoError.projectState }
+        guard let sourceAssignments = (source["thread-project-assignments"] ?? [:]) as? [String: Any] else { throw PotetoError.projectState }
+        var remoteIDs = Set<String>()
+        for value in sourceAssignments.values {
+            guard let item = value as? [String: Any], let kind = item["projectKind"] as? String,
+                  let id = item["projectId"] as? String, !id.isEmpty else { throw PotetoError.projectState }
+            if kind == "remote" { guard s.projects[id] == nil else { throw PotetoError.projectState }; remoteIDs.insert(id) }
+            else if kind != "local" { throw PotetoError.projectState }
+        }
+        let targetAssignments = (target["thread-project-assignments"] ?? [:]) as? [String: Any]
+        guard let targetAssignments else { throw PotetoError.projectState }
+        for value in targetAssignments.values {
+            guard let item = value as? [String: Any], item["projectKind"] as? String == "remote",
+                  let id = item["projectId"] as? String else { continue }
+            guard s.projects[id] == nil else { throw PotetoError.projectState }
+        }
+        guard remoteIDs.isDisjoint(with: t.projects.keys) else { throw PotetoError.projectState }
+        let sourceOrder = try strings(source["project-order"])
+        guard sourceOrder.allSatisfy({ s.projects[$0] != nil || remoteIDs.contains($0) }) else { throw PotetoError.projectState }
+        let order = sourceOrder.filter { s.projects[$0] != nil }
         let targetOrder = try strings(target["project-order"])
         out["project-order"] = ordered(targetOrder, order + s.projects.keys.sorted().filter { !order.contains($0) })
         for key in ["project-appearances", "project-files"] {
             guard let src = (source[key] ?? [:]) as? [String: Any], var dst = (target[key] ?? [:]) as? [String: Any] else { throw PotetoError.projectState }
             for (id, value) in src {
+                if remoteIDs.contains(id) { continue }
                 guard s.projects[id] != nil else { throw PotetoError.projectState }
                 if let old = dst[id], !equal(old, value) { throw PotetoError.projectState }; dst[id] = value
             }
@@ -582,18 +623,17 @@ struct LocalProjectLayout {
         }
         if source["pinned-project-ids"] != nil || target["pinned-project-ids"] != nil {
             let pins = try strings(source["pinned-project-ids"])
-            guard pins.allSatisfy({ s.projects[$0] != nil }) else { throw PotetoError.projectState }
-            out["pinned-project-ids"] = ordered(try strings(target["pinned-project-ids"]), pins)
+            guard pins.allSatisfy({ s.projects[$0] != nil || remoteIDs.contains($0) }) else { throw PotetoError.projectState }
+            out["pinned-project-ids"] = ordered(try strings(target["pinned-project-ids"]), pins.filter { s.projects[$0] != nil })
         }
-        guard let assignments = (source["thread-project-assignments"] ?? [:]) as? [String: Any],
-              var dest = (target["thread-project-assignments"] ?? [:]) as? [String: Any] else { throw PotetoError.projectState }
+        var dest = targetAssignments
         var threads = Set<String>()
         let projectless = Set(try strings(target["projectless-thread-ids"]))
-        for (thread, value) in assignments {
+        for (thread, value) in sourceAssignments {
             guard let item = value as? [String: Any], let kind = item["projectKind"] as? String,
                   let id = item["projectId"] as? String else { throw PotetoError.projectState }
-            guard kind == "local" else { throw PotetoError.projectState }
-            guard Set(item.keys) == Set(["projectKind", "projectId"]), s.projects[id] != nil,
+            if kind == "remote" { continue }
+            guard kind == "local", Set(item.keys) == Set(["projectKind", "projectId"]), s.projects[id] != nil,
                   !projectless.contains(thread) else { throw PotetoError.projectState }
             if let old = dest[thread], !equal(old, value) { throw PotetoError.projectState }
             dest[thread] = value; threads.insert(thread)
@@ -609,14 +649,24 @@ struct LocalProjectLayout {
         }
         guard let sides = (source["sidebar-project-thread-orders"] ?? [:]) as? [String: Any],
               var targetSides = (target["sidebar-project-thread-orders"] ?? [:]) as? [String: Any] else { throw PotetoError.projectState }
+        func canPlaceInSidebar(_ assignment: Any?, projectID: String) -> Bool {
+            guard let assignment else { return true }
+            guard let item = assignment as? [String: Any] else { return false }
+            return item["projectKind"] as? String == "local" && item["projectId"] as? String == projectID
+        }
         for (id, value) in sides {
+            if remoteIDs.contains(id) { continue }
             guard s.projects[id] != nil, let entry = value as? [String: Any], Set(entry.keys) == ["threadIds"],
                   let ids = entry["threadIds"] as? [String] else { throw PotetoError.projectState }
             var previous: [String] = []
             if let old = targetSides[id] {
                 guard let entry = old as? [String: Any], Set(entry.keys) == ["threadIds"], let ids = entry["threadIds"] as? [String] else { throw PotetoError.projectState }; previous = ids
             }
-            targetSides[id] = ["threadIds": ordered(previous, ids)]
+            let localOrder = ids.filter { thread in
+                !projectless.contains(thread) && canPlaceInSidebar(sourceAssignments[thread], projectID: id)
+                    && canPlaceInSidebar(dest[thread], projectID: id)
+            }
+            targetSides[id] = ["threadIds": ordered(previous, localOrder)]
         }
         if source["sidebar-project-thread-orders"] != nil || target["sidebar-project-thread-orders"] != nil { out["sidebar-project-thread-orders"] = targetSides }
         return out
@@ -658,6 +708,91 @@ enum NativeProjectState {
         return result.sorted()
     }
 
+    static func merge(_ targetData: Data, targetPath: [String], sourceData: Data, sourcePath: [String]) throws -> Data {
+        func parse(_ data: Data, _ path: [String]) throws -> (Data, [String: Any]) {
+            var parser = UniqueJSONKeys(bytes: Array(data))
+            do { try parser.validate(); parser.index = 0; let range = try parser.range(path)
+                let raw = data.subdata(in: range)
+                guard let object = try JSONSerialization.jsonObject(with: raw) as? [String: Any] else { throw PotetoError.projectState }
+                return (raw, object)
+            } catch { throw PotetoError.projectState }
+        }
+        let (targetRaw, target) = try parse(targetData, targetPath)
+        let (sourceRaw, source) = try parse(sourceData, sourcePath)
+        let merged = try LocalProjectLayout.merged(target, source)
+        let layout = try LocalProjectLayout(source)
+        func members(_ data: Data) throws -> [String: Range<Int>] {
+            var parser = UniqueJSONKeys(bytes: Array(data)); return try parser.objectMembers()
+        }
+        let targetMembers = try members(targetRaw), sourceMembers = try members(sourceRaw)
+        for key in ["local-projects", "project-appearances", "project-files"] {
+            guard let targetRange = targetMembers[key], let sourceRange = sourceMembers[key] else { continue }
+            let targetField = targetRaw.subdata(in: targetRange), sourceField = sourceRaw.subdata(in: sourceRange)
+            let targetEntries = try members(targetField), sourceEntries = try members(sourceField)
+            for id in layout.projects.keys {
+                guard let leftRange = targetEntries[id], let rightRange = sourceEntries[id] else { continue }
+                let left = targetField.subdata(in: leftRange), right = sourceField.subdata(in: rightRange)
+                let leftNumbers = try numbers(left), rightNumbers = try numbers(right)
+                guard leftNumbers == rightNumbers else { throw PotetoError.projectState }
+                if left != right && !leftNumbers.isEmpty {
+                    let leftValue = try JSONSerialization.jsonObject(with: left, options: [.fragmentsAllowed])
+                    let rightValue = try JSONSerialization.jsonObject(with: right, options: [.fragmentsAllowed])
+                    let leftSerialized = try JSONSerialization.data(withJSONObject: [leftValue], options: [.sortedKeys])
+                    let rightSerialized = try JSONSerialization.data(withJSONObject: [rightValue], options: [.sortedKeys])
+                    guard try numbers(leftSerialized) == leftNumbers, try numbers(rightSerialized) == rightNumbers else { throw PotetoError.projectState }
+                }
+            }
+        }
+        func encoded(_ value: Any) throws -> Data {
+            let wrapper = try JSONSerialization.data(withJSONObject: [value], options: [.fragmentsAllowed, .sortedKeys])
+            return wrapper.subdata(in: 1..<(wrapper.count - 1))
+        }
+        func build(_ oldRaw: Data?, _ old: Any?, _ new: Any, _ incomingRaw: Data?, _ incoming: Any?) throws -> Data {
+            if let oldRaw, let old, LocalProjectLayout.equal(old, new) { return oldRaw }
+            if old == nil, let incomingRaw, let incoming, LocalProjectLayout.equal(incoming, new) { return incomingRaw }
+            if let dict = new as? [String: Any] {
+                let previous = old as? [String: Any] ?? [:], incomingDict = incoming as? [String: Any] ?? [:]
+                let oldMembers = try oldRaw.map(members) ?? [:], incomingMembers = try incomingRaw.map(members) ?? [:]
+                var output = oldRaw ?? Data("{}".utf8)
+                var edits: [(Range<Int>, Data)] = [], additions: [Data] = []
+                for key in dict.keys.sorted() {
+                    let oldPart = oldMembers[key].map { output.subdata(in: $0) }
+                    let newPart = incomingMembers[key].flatMap { r in incomingRaw.map { $0.subdata(in: r) } }
+                    let part = try build(oldPart, previous[key], dict[key]!, newPart, incomingDict[key])
+                    if let range = oldMembers[key] { if part != oldPart { edits.append((range, part)) } }
+                    else { additions.append(try encoded(key) + Data(":".utf8) + part) }
+                }
+                for (range, part) in edits.sorted(by: { $0.0.lowerBound > $1.0.lowerBound }) { output.replaceSubrange(range, with: part) }
+                if !additions.isEmpty {
+                    guard let end = output.lastIndex(of: 125) else { throw PotetoError.projectState }
+                    var suffix = Data(previous.isEmpty ? [] : [44])
+                    for (index, item) in additions.enumerated() { if index > 0 { suffix.append(44) }; suffix.append(item) }
+                    output.insert(contentsOf: suffix, at: end)
+                }
+                return output
+            }
+            if let array = new as? [String], let oldArray = old as? [String], let oldRaw,
+               array.starts(with: oldArray) {
+                var output = oldRaw
+                let extra = Array(array.dropFirst(oldArray.count))
+                if !extra.isEmpty {
+                    guard let end = output.lastIndex(of: 93) else { throw PotetoError.projectState }
+                    var suffix = Data(oldArray.isEmpty ? [] : [44])
+                    for (index, item) in extra.enumerated() { if index > 0 { suffix.append(44) }; suffix.append(try encoded(item)) }
+                    output.insert(contentsOf: suffix, at: end)
+                }
+                return output
+            }
+            guard old == nil else { throw PotetoError.projectState }
+            let result = try encoded(new)
+            if let incomingRaw { guard try numbers(incomingRaw) == numbers(result) else { throw PotetoError.projectState } }
+            return result
+        }
+        let result = try build(targetRaw, target, merged, sourceRaw, source)
+        var parser = UniqueJSONKeys(bytes: Array(targetData)); let range = try parser.range(targetPath)
+        var output = targetData; output.replaceSubrange(range, with: result); return output
+    }
+
     static func matches(_ atoms: Any?, _ descriptor: NativeAccountDescriptor) -> Bool {
         guard let atoms = atoms as? [String: Any], let identity = atoms["local-document-identity"] as? [String: Any],
               identity["accountId"] as? String == descriptor.accountId, identity["userId"] as? String == descriptor.userId else { return false }
@@ -665,20 +800,23 @@ enum NativeProjectState {
     }
     static func prepare(_ data: Data, source: AuthBundle, target: AuthBundle) throws -> Data? {
         var unique = UniqueJSONKeys(bytes: Array(data)); do { try unique.validate() } catch { throw PotetoError.projectState }
-        guard var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              var state = root["electron-account-renderer-state-v1"] as? [String: Any],
-              var inactive = state["inactive"] as? [String: Any], state.keys.contains("owner") else { throw PotetoError.projectState }
-        guard let serialized = try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]),
-              try numbers(data) == numbers(serialized) else { throw PotetoError.projectState }
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let state = root["electron-account-renderer-state-v1"] as? [String: Any],
+              let inactive = state["inactive"] as? [String: Any], state.keys.contains("owner") else { throw PotetoError.projectState }
         let sourceID = try NativeAccountDescriptor(auth: source), targetID = try NativeAccountDescriptor(auth: target)
         let sourceGlobals: [String: Any]
+        let sourcePath: [String]
+        let statePath = ["electron-account-renderer-state-v1", "inactive"]
         if let owner = state["owner"] as? String {
             guard !owner.isEmpty, inactive[owner] == nil, matches(root["electron-persisted-atom-state"], sourceID) else { throw PotetoError.projectState }
-            sourceGlobals = root
+            sourceGlobals = root; sourcePath = []
         } else if state["owner"] is NSNull {
-            let matches = inactive.values.compactMap { $0 as? [String: Any] }.filter { matches($0["atoms"], sourceID) }
-            guard matches.count == 1, let globals = matches[0]["globals"] as? [String: Any] else { throw PotetoError.projectState }
-            sourceGlobals = globals
+            let candidates = inactive.compactMap { key, value -> String? in
+                guard let slot = value as? [String: Any], matches(slot["atoms"], sourceID) else { return nil }; return key
+            }
+            guard candidates.count == 1, let slot = inactive[candidates[0]] as? [String: Any],
+                  let globals = slot["globals"] as? [String: Any] else { throw PotetoError.projectState }
+            sourceGlobals = globals; sourcePath = statePath + [candidates[0], "globals"]
         } else { throw PotetoError.projectState }
         let layout = try LocalProjectLayout(sourceGlobals)
         _ = try LocalProjectLayout.merged([:], sourceGlobals)
@@ -690,13 +828,11 @@ enum NativeProjectState {
         let candidates = inactive.compactMap { key, value -> String? in
             guard let slot = value as? [String: Any], matches(slot["atoms"], targetID) else { return nil }; return key
         }
-        guard candidates.count == 1, var slot = inactive[candidates[0]] as? [String: Any],
+        guard candidates.count == 1, let slot = inactive[candidates[0]] as? [String: Any],
               let globals = slot["globals"] as? [String: Any], sourceID != targetID else { throw PotetoError.projectState }
-        let merged = try LocalProjectLayout.merged(globals, sourceGlobals)
+        _ = try LocalProjectLayout.merged(globals, sourceGlobals)
         if layout.projects.isEmpty { return nil }
-        slot["globals"] = merged
-        inactive[candidates[0]] = slot; state["inactive"] = inactive; root["electron-account-renderer-state-v1"] = state
-        return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        return try merge(data, targetPath: statePath + [candidates[0], "globals"], sourceData: data, sourcePath: sourcePath)
     }
 }
 

@@ -121,7 +121,7 @@ struct ProjectRetentionTests {
         try rejected(json(emptyMissing))
         for field in ["project-order", "thread-project-assignments"] {
             var same = state()
-            same[field] = field == "project-order" ? ["ghost"] : ["remote": ["projectKind": "remote", "projectId": "remote-id"]]
+            same[field] = field == "project-order" ? ["ghost"] : ["remote": ["projectKind": "local", "projectId": "remote-id"]]
             let bytes = try json(same)
             try write(a.data, authURL); try write(bytes, stateURL, 0o644)
             do { try activateAccount(a, authURL: authURL, isRunning: { false }); fatalError("same-identity invalid layout accepted") }
@@ -132,16 +132,24 @@ struct ProjectRetentionTests {
         var mixed = state(), mixedAssignments = mixed["thread-project-assignments"] as! [String: Any]
         mixedAssignments["remote"] = ["projectKind": "remote", "projectId": "remote-id"]
         mixed["thread-project-assignments"] = mixedAssignments
-        try rejected(json(mixed))
+        let mixedOutput = try object(NativeProjectState.prepare(json(mixed), source: a, target: b)!)
+        let mixedState = mixedOutput["electron-account-renderer-state-v1"] as! [String: Any]
+        let mixedSlots = mixedState["inactive"] as! [String: Any]
+        let mixedTarget = (mixedSlots["owner-B"] as! [String: Any])["globals"] as! [String: Any]
+        precondition((mixedTarget["thread-project-assignments"] as! [String: Any])["remote"] == nil)
         var remoteTarget = state(), remoteRenderer = remoteTarget["electron-account-renderer-state-v1"] as! [String: Any]
         var remoteSlots = remoteRenderer["inactive"] as! [String: Any], remoteSlot = remoteSlots["owner-B"] as! [String: Any], remoteGlobals = remoteSlot["globals"] as! [String: Any]
         remoteGlobals["thread-project-assignments"] = ["remote": ["projectKind": "remote", "projectId": "remote-id"]]
+        remoteGlobals["project-order"] = ["remote-id", "b"]
+        remoteGlobals["sidebar-project-thread-orders"] = ["remote-id": ["threadIds": ["remote"]], "b": ["threadIds": ["thread-b"]]]
         remoteSlot["globals"] = remoteGlobals; remoteSlots["owner-B"] = remoteSlot; remoteRenderer["inactive"] = remoteSlots; remoteTarget["electron-account-renderer-state-v1"] = remoteRenderer
         let remoteOutput = try object(NativeProjectState.prepare(json(remoteTarget), source: a, target: b)!)
         let remoteState = remoteOutput["electron-account-renderer-state-v1"] as! [String: Any], remoteInactive = remoteState["inactive"] as! [String: Any]
         let remoteResult = (remoteInactive["owner-B"] as! [String: Any])["globals"] as! [String: Any]
         let assignments = remoteResult["thread-project-assignments"] as! [String: Any]
         precondition((assignments["remote"] as! [String: String])["projectKind"] == "remote" && assignments["thread-a"] != nil)
+        precondition(remoteResult["project-order"] as! [String] == ["remote-id", "b", "a"])
+        precondition(((remoteResult["sidebar-project-thread-orders"] as! [String: Any])["remote-id"] as! [String: [String]])["threadIds"] == ["remote"])
         var boolConflict = state(), boolRenderer = boolConflict["electron-account-renderer-state-v1"] as! [String: Any]
         var boolSlots = boolRenderer["inactive"] as! [String: Any], boolSlot = boolSlots["owner-B"] as! [String: Any], boolGlobals = boolSlot["globals"] as! [String: Any]
         boolConflict["project-appearances"] = ["a": ["flag": true]]
@@ -153,18 +161,57 @@ struct ProjectRetentionTests {
             let input = Data(base.replacingOccurrences(of: "\"other\":1", with: "\"other\":\(literal)").utf8)
             precondition(input != Data(base.utf8))
             try write(a.data, authURL); try write(input, stateURL, 0o644)
-            do {
-                try activateAccount(b, authURL: authURL, isRunning: { false })
-                let output = try Data(contentsOf: stateURL)
-                let result = try object(output), renderer = result["electron-account-renderer-state-v1"] as! [String: Any]
-                let slots = renderer["inactive"] as! [String: Any], other = slots["other"] as! [String: Any]
-                let otherJSON = try json(other)
-                precondition((try! NativeProjectState.numbers(otherJSON)) == (try! NativeProjectState.numbers(Data("[\(literal)]".utf8))))
-            } catch PotetoError.projectState {
-                precondition(try! Data(contentsOf: authURL) == a.data)
-                precondition(try! Data(contentsOf: stateURL) == input)
-            }
+            try activateAccount(b, authURL: authURL, isRunning: { false })
+            let output = try Data(contentsOf: stateURL)
+            precondition(String(decoding: output, as: UTF8.self).contains("\"other\":\(literal)"))
         }
+        var remoteSource = state()
+        remoteSource["project-order"] = ["remote-id", "a"]
+        remoteSource["pinned-project-ids"] = ["remote-id", "a"]
+        remoteSource["sidebar-project-thread-orders"] = ["remote-id": ["threadIds": ["remote-thread"]], "a": ["threadIds": ["thread-a", "remote-thread"]]]
+        remoteSource["thread-project-assignments"] = ["remote-thread": ["projectKind": "remote", "projectId": "remote-id"], "thread-a": ["projectKind": "local", "projectId": "a"]]
+        remoteSource["thread-workspace-root-hints"] = ["remote-thread": "/remote", "thread-a": "/synthetic/shared"]
+        let remoteSourceBytes = try json(remoteSource)
+        let inherited = try object(NativeProjectState.prepare(remoteSourceBytes, source: a, target: b)!)
+        let inheritedRenderer = inherited["electron-account-renderer-state-v1"] as! [String: Any]
+        let inheritedSlots = inheritedRenderer["inactive"] as! [String: Any]
+        let inheritedGlobals = (inheritedSlots["owner-B"] as! [String: Any])["globals"] as! [String: Any]
+        precondition(inheritedGlobals["project-order"] as! [String] == ["b", "a"])
+        precondition(inheritedGlobals["pinned-project-ids"] as! [String] == ["a"])
+        precondition((inheritedGlobals["sidebar-project-thread-orders"] as! [String: Any])["remote-id"] == nil)
+        let inheritedSidebars = inheritedGlobals["sidebar-project-thread-orders"] as! [String: [String: [String]]]
+        precondition(inheritedSidebars["a"]?["threadIds"] == ["thread-a"], "remote thread leaked into inherited local sidebar")
+        precondition((inheritedGlobals["thread-project-assignments"] as! [String: Any])["remote-thread"] == nil)
+        precondition((inheritedGlobals["thread-workspace-root-hints"] as! [String: Any])["remote-thread"] == nil)
+        var collision = remoteSource
+        collision["thread-project-assignments"] = ["remote-thread": ["projectKind": "remote", "projectId": "a"]]
+        try rejected(json(collision))
+        var targetCollision = state(), collisionRenderer = targetCollision["electron-account-renderer-state-v1"] as! [String: Any]
+        var collisionSlots = collisionRenderer["inactive"] as! [String: Any], collisionSlot = collisionSlots["owner-B"] as! [String: Any]
+        var collisionGlobals = collisionSlot["globals"] as! [String: Any]
+        collisionGlobals["thread-project-assignments"] = ["remote-thread": ["projectKind": "remote", "projectId": "a"]]
+        collisionSlot["globals"] = collisionGlobals; collisionSlots["owner-B"] = collisionSlot
+        collisionRenderer["inactive"] = collisionSlots; targetCollision["electron-account-renderer-state-v1"] = collisionRenderer
+        try rejected(json(targetCollision))
+        for field in ["project-order", "pinned-project-ids", "sidebar-project-thread-orders"] {
+            var unknown = remoteSource
+            unknown[field] = field == "sidebar-project-thread-orders" ? ["unknown": ["threadIds": []]] : ["unknown"]
+            try rejected(json(unknown))
+        }
+        let rootMerged = try NativeProjectState.merge(try json(globals("b")), targetPath: [], sourceData: remoteSourceBytes, sourcePath: [])
+        let rootResult = try object(rootMerged)
+        precondition(Set((rootResult["local-projects"] as! [String: Any]).keys) == ["a", "b"])
+        precondition((rootResult["thread-project-assignments"] as! [String: Any])["remote-thread"] == nil)
+        let numericSource = Data("{\"local-projects\":{\"a\":{\"id\":\"a\",\"name\":\"a\",\"rootPaths\":[\"/synthetic/shared\"],\"createdAt\":1,\"updatedAt\":2}},\"project-appearances\":{\"a\":{\"amount\":1.2345678901234567890123456789}}}".utf8)
+        let numericTarget = Data("{\"unrelated\":-0,\"local-projects\":{},\"project-appearances\":{\"remote\":{\"amount\":5e-324}}}".utf8)
+        let numericMerged = try NativeProjectState.merge(numericTarget, targetPath: [], sourceData: numericSource, sourcePath: [])
+        let numericText = String(decoding: numericMerged, as: UTF8.self)
+        precondition(numericText.contains("\"unrelated\":-0") && numericText.contains("\"amount\":5e-324"))
+        precondition(numericText.contains("\"amount\":1.2345678901234567890123456789"))
+        let numericRepeated = try NativeProjectState.merge(numericMerged, targetPath: [], sourceData: numericSource, sourcePath: [])
+        precondition(numericRepeated == numericMerged)
+        let conflictingNumeric = Data(String(decoding: numericSource, as: UTF8.self).replacingOccurrences(of: "1.2345678901234567890123456789", with: "1.2345678901234567890123456788").utf8)
+        do { _ = try NativeProjectState.merge(conflictingNumeric, targetPath: [], sourceData: numericSource, sourcePath: []); fatalError("numeric conflict accepted") } catch PotetoError.projectState { }
         var conflict = state(), renderer = conflict["electron-account-renderer-state-v1"] as! [String: Any], inactive = renderer["inactive"] as! [String: Any], slot = inactive["owner-B"] as! [String: Any], target = slot["globals"] as! [String: Any]
         var changedProject = project("a"); changedProject["name"] = "different"; target["local-projects"] = ["a": changedProject]; slot["globals"] = target; inactive["owner-B"] = slot; renderer["inactive"] = inactive; conflict["electron-account-renderer-state-v1"] = renderer
         try write(a.data, authURL); try write(json(conflict), stateURL, 0o644)
@@ -197,7 +244,10 @@ struct ProjectRetentionTests {
         do { _ = try NativeProjectState.prepare(json(nullRoot), source: a, target: a); fatalError("same null-owner slot accepted") } catch PotetoError.projectState { }
         try write(json(nullRoot), stateURL, 0o644); try activateAccount(b, authURL: authURL, isRunning: { false })
         let nullPrepared = try object(Data(contentsOf: stateURL)), nullRenderer = nullPrepared["electron-account-renderer-state-v1"] as! [String: Any], nullInactive = nullRenderer["inactive"] as! [String: Any], nullB = nullInactive["owner-B"] as! [String: Any], nullGlobals = nullB["globals"] as! [String: Any]
+        precondition(nullRenderer["owner"] is NSNull)
+        precondition((nullPrepared["electron-persisted-atom-state"] as! NSDictionary) == (atom("A") as NSDictionary))
         precondition(Set((nullGlobals["local-projects"] as! [String: Any]).keys) == ["a", "b"])
+        precondition(nullGlobals["project-order"] as! [String] == ["b", "a"])
         let attrs = try fm.attributesOfItem(atPath: stateURL.path); precondition((attrs[.posixPermissions] as! NSNumber).intValue == 0o644)
         try write(a.data, authURL); try write(json(state()), stateURL, 0o644)
         var calls = 0
