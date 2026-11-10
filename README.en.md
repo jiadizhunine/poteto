@@ -10,8 +10,6 @@
 
 <p align="center">Codex subscription usage and account management in your macOS menu bar</p>
 
-![poteto menu panel](assets/screenshot-menu-redacted.png)
-
 poteto shows usage and reset times for official Codex subscriptions and lets you save and switch between official accounts. It requires macOS 14 or later. Account switching uses the current macOS user's `~/.codex/auth.json`. Adding accounts and starting the usage timer use `/Applications/ChatGPT.app`.
 
 ## Install
@@ -29,7 +27,10 @@ Manage launch at login in settings. After moving the app, enable launch at login
 3. View the plan, usage, reset times, and any balance or reset credits returned by the service. poteto refreshes every 5 minutes and marks failed reads separately.
 4. Before switching accounts, quit ChatGPT and Codex normally, then select the target account.
 
-![poteto usage details](assets/screenshot-redacted.png)
+<p align="center">
+  <a href="assets/screenshot-menu-redacted.png"><img src="assets/screenshot-menu-redacted.png" width="340" alt="poteto menu panel"></a>
+  <a href="assets/screenshot-redacted.png"><img src="assets/screenshot-redacted.png" width="224" alt="poteto usage details"></a>
+</p>
 
 When all ordinary usage windows are full and the reset timer has not started, poteto sends one short message with that account's default model in a separate session to start the timer, at most once per period. The test consumes a small amount of subscription usage.
 

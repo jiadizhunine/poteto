@@ -10,8 +10,6 @@
 
 <p align="center">macOS 菜单栏里的 Codex 订阅额度与账号管理工具</p>
 
-![poteto 菜单面板](assets/screenshot-menu-redacted.png)
-
 poteto 显示官方 Codex 订阅的额度与重置时间，支持保存多个官方账号并手动切换。需要 macOS 14 或更新版本。切换账号使用当前 macOS 用户的 `~/.codex/auth.json`。添加账号和启动额度计时使用 `/Applications/ChatGPT.app`。
 
 ## 安装
@@ -29,7 +27,10 @@ poteto 显示官方 Codex 订阅的额度与重置时间，支持保存多个官
 3. 查看套餐、额度、重置时间和接口返回的余额或重置券信息。poteto 每 5 分钟刷新一次，读取失败会单独标记。
 4. 切换账号前，正常退出 ChatGPT 和 Codex，再选择目标账号。
 
-![poteto 额度详情](assets/screenshot-redacted.png)
+<p align="center">
+  <a href="assets/screenshot-menu-redacted.png"><img src="assets/screenshot-menu-redacted.png" width="340" alt="poteto 菜单面板"></a>
+  <a href="assets/screenshot-redacted.png"><img src="assets/screenshot-redacted.png" width="224" alt="poteto 额度详情"></a>
+</p>
 
 当所有普通额度窗口满额且重置计时尚未启动时，poteto 会用该账号的默认模型，在独立会话中发送一条短消息启动计时，每周期至多一次。测试消耗少量订阅额度。
 
