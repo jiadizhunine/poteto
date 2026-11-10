@@ -566,6 +566,7 @@ struct LocalProject: Equatable {
 }
 
 struct LocalProjectLayout {
+    enum MergePolicy { case strict, accountSwitch }
     let projects: [String: LocalProject]
     let raw: [String: Any]
     init(_ raw: [String: Any]) throws {
@@ -579,13 +580,16 @@ struct LocalProjectLayout {
               let right = try? JSONSerialization.data(withJSONObject: [b], options: [.sortedKeys]) else { return false }
         return left == right
     }
-    static func merged(_ target: [String: Any], _ source: [String: Any]) throws -> [String: Any] {
+    static func merged(_ target: [String: Any], _ source: [String: Any], policy: MergePolicy = .strict) throws -> [String: Any] {
         let s = try LocalProjectLayout(source), t = try LocalProjectLayout(target)
         var out = target
         var records = target["local-projects"] as? [String: Any] ?? [:]
         let incoming = source["local-projects"] as? [String: Any] ?? [:]
         for (id, project) in s.projects {
-            if let existing = t.projects[id], existing != project { throw PotetoError.projectState }
+            if let existing = t.projects[id] {
+                if policy == .strict && existing != project { throw PotetoError.projectState }
+                if policy == .accountSwitch && (existing.created != project.created || Set(existing.roots) != Set(project.roots)) { throw PotetoError.projectState }
+            }
             records[id] = records[id] ?? incoming[id]
         }
         out["local-projects"] = records
@@ -595,6 +599,7 @@ struct LocalProjectLayout {
         func ordered(_ a: [String], _ b: [String]) -> [String] {
             var seen = Set(a); return a + b.filter { seen.insert($0).inserted }
         }
+        if policy == .accountSwitch { _ = try strings(source["projectless-thread-ids"]) }
         guard let sourceAssignments = (source["thread-project-assignments"] ?? [:]) as? [String: Any] else { throw PotetoError.projectState }
         var remoteIDs = Set<String>()
         for value in sourceAssignments.values {
@@ -612,22 +617,26 @@ struct LocalProjectLayout {
         }
         guard remoteIDs.isDisjoint(with: t.projects.keys) else { throw PotetoError.projectState }
         let sourceOrder = try strings(source["project-order"])
-        guard sourceOrder.allSatisfy({ s.projects[$0] != nil || remoteIDs.contains($0) }) else { throw PotetoError.projectState }
+        guard policy == .accountSwitch || sourceOrder.allSatisfy({ s.projects[$0] != nil || remoteIDs.contains($0) }) else { throw PotetoError.projectState }
         let order = sourceOrder.filter { s.projects[$0] != nil }
         let targetOrder = try strings(target["project-order"])
         out["project-order"] = ordered(targetOrder, order + s.projects.keys.sorted().filter { !order.contains($0) })
         for key in ["project-appearances", "project-files"] {
             guard let src = (source[key] ?? [:]) as? [String: Any], var dst = (target[key] ?? [:]) as? [String: Any] else { throw PotetoError.projectState }
             for (id, value) in src {
-                if remoteIDs.contains(id) { continue }
+                if remoteIDs.contains(id) || (policy == .accountSwitch && s.projects[id] == nil) { continue }
                 guard s.projects[id] != nil else { throw PotetoError.projectState }
-                if let old = dst[id], !equal(old, value) { throw PotetoError.projectState }; dst[id] = value
+                if let old = dst[id] {
+                    if policy == .strict && !equal(old, value) { throw PotetoError.projectState }
+                    if policy == .accountSwitch { continue }
+                }
+                dst[id] = value
             }
             if source[key] != nil || target[key] != nil { out[key] = dst }
         }
         if source["pinned-project-ids"] != nil || target["pinned-project-ids"] != nil {
             let pins = try strings(source["pinned-project-ids"])
-            guard pins.allSatisfy({ s.projects[$0] != nil || remoteIDs.contains($0) }) else { throw PotetoError.projectState }
+            guard policy == .accountSwitch || pins.allSatisfy({ s.projects[$0] != nil || remoteIDs.contains($0) }) else { throw PotetoError.projectState }
             out["pinned-project-ids"] = ordered(try strings(target["pinned-project-ids"]), pins.filter { s.projects[$0] != nil })
         }
         var dest = targetAssignments
@@ -637,17 +646,28 @@ struct LocalProjectLayout {
             guard let item = value as? [String: Any], let kind = item["projectKind"] as? String,
                   let id = item["projectId"] as? String else { throw PotetoError.projectState }
             if kind == "remote" { continue }
-            guard kind == "local", Set(item.keys) == Set(["projectKind", "projectId"]), s.projects[id] != nil,
-                  !projectless.contains(thread) else { throw PotetoError.projectState }
-            if let old = dest[thread], !equal(old, value) { throw PotetoError.projectState }
-            dest[thread] = value; threads.insert(thread)
+            guard kind == "local", Set(item.keys) == Set(["projectKind", "projectId"]), s.projects[id] != nil else { throw PotetoError.projectState }
+            if projectless.contains(thread) {
+                if policy == .strict { throw PotetoError.projectState }
+                continue
+            }
+            if let old = dest[thread], !equal(old, value) {
+                if policy == .strict { throw PotetoError.projectState }
+                continue
+            }
+            if dest[thread] == nil { dest[thread] = value }
+            threads.insert(thread)
         }
         if source["thread-project-assignments"] != nil || target["thread-project-assignments"] != nil { out["thread-project-assignments"] = dest }
         for key in ["thread-workspace-root-hints", "thread-projectless-output-directories"] {
             guard let src = (source[key] ?? [:]) as? [String: Any], var dst = (target[key] ?? [:]) as? [String: Any] else { throw PotetoError.projectState }
             for thread in threads { if let value = src[thread] {
                 guard value is String else { throw PotetoError.projectState }
-                if let old = dst[thread], !equal(old, value) { throw PotetoError.projectState }; dst[thread] = value
+                if let old = dst[thread] {
+                    if policy == .strict && !equal(old, value) { throw PotetoError.projectState }
+                    if policy == .accountSwitch { continue }
+                }
+                dst[thread] = value
             } }
             if source[key] != nil || target[key] != nil { out[key] = dst }
         }
@@ -659,7 +679,7 @@ struct LocalProjectLayout {
             return item["projectKind"] as? String == "local" && item["projectId"] as? String == projectID
         }
         for (id, value) in sides {
-            if remoteIDs.contains(id) { continue }
+            if remoteIDs.contains(id) || (policy == .accountSwitch && s.projects[id] == nil) { continue }
             guard s.projects[id] != nil, let entry = value as? [String: Any], Set(entry.keys) == ["threadIds"],
                   let ids = entry["threadIds"] as? [String] else { throw PotetoError.projectState }
             var previous: [String] = []
@@ -712,7 +732,8 @@ enum NativeProjectState {
         return result.sorted()
     }
 
-    static func merge(_ targetData: Data, targetPath: [String], sourceData: Data, sourcePath: [String]) throws -> Data {
+    static func merge(_ targetData: Data, targetPath: [String], sourceData: Data, sourcePath: [String],
+                      policy: LocalProjectLayout.MergePolicy = .strict) throws -> Data {
         func parse(_ data: Data, _ path: [String]) throws -> (Data, [String: Any]) {
             var parser = UniqueJSONKeys(bytes: Array(data))
             do { try parser.validate(); parser.index = 0; let range = try parser.range(path)
@@ -723,19 +744,25 @@ enum NativeProjectState {
         }
         let (targetRaw, target) = try parse(targetData, targetPath)
         let (sourceRaw, source) = try parse(sourceData, sourcePath)
-        let merged = try LocalProjectLayout.merged(target, source)
+        let merged = try LocalProjectLayout.merged(target, source, policy: policy)
         let layout = try LocalProjectLayout(source)
         func members(_ data: Data) throws -> [String: Range<Int>] {
             var parser = UniqueJSONKeys(bytes: Array(data)); return try parser.objectMembers()
         }
         let targetMembers = try members(targetRaw), sourceMembers = try members(sourceRaw)
         for key in ["local-projects", "project-appearances", "project-files"] {
+            if policy == .accountSwitch && key != "local-projects" { continue }
             guard let targetRange = targetMembers[key], let sourceRange = sourceMembers[key] else { continue }
             let targetField = targetRaw.subdata(in: targetRange), sourceField = sourceRaw.subdata(in: sourceRange)
             let targetEntries = try members(targetField), sourceEntries = try members(sourceField)
             for id in layout.projects.keys {
                 guard let leftRange = targetEntries[id], let rightRange = sourceEntries[id] else { continue }
                 let left = targetField.subdata(in: leftRange), right = sourceField.subdata(in: rightRange)
+                if policy == .accountSwitch {
+                    guard let lc = try members(left)["createdAt"], let rc = try members(right)["createdAt"],
+                          try numbers(left.subdata(in: lc)) == numbers(right.subdata(in: rc)) else { throw PotetoError.projectState }
+                    continue
+                }
                 let leftNumbers = try numbers(left), rightNumbers = try numbers(right)
                 guard leftNumbers == rightNumbers else { throw PotetoError.projectState }
                 if left != right && !leftNumbers.isEmpty {
@@ -802,45 +829,72 @@ enum NativeProjectState {
               identity["accountId"] as? String == descriptor.accountId, identity["userId"] as? String == descriptor.userId else { return false }
         return true
     }
-    static func prepare(_ data: Data, source: AuthBundle, target: AuthBundle) throws -> Data? {
+    static func prepare(_ data: Data, source: AuthBundle?, target: AuthBundle) throws -> Data? {
         var unique = UniqueJSONKeys(bytes: Array(data)); do { try unique.validate() } catch { throw PotetoError.projectState }
-        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let state = root["electron-account-renderer-state-v1"] as? [String: Any],
-              let inactive = state["inactive"] as? [String: Any], state.keys.contains("owner") else { throw PotetoError.projectState }
-        let sourceID = try NativeAccountDescriptor(auth: source), targetID = try NativeAccountDescriptor(auth: target)
-        let sourceGlobals: [String: Any]
-        let sourcePath: [String]
-        let statePath = ["electron-account-renderer-state-v1", "inactive"]
-        if let owner = state["owner"] as? String {
-            guard !owner.isEmpty, inactive[owner] == nil, matches(root["electron-persisted-atom-state"], sourceID) else { throw PotetoError.projectState }
-            sourceGlobals = root; sourcePath = []
-        } else if state["owner"] is NSNull {
-            let candidates = inactive.compactMap { key, value -> String? in
-                guard let slot = value as? [String: Any], matches(slot["atoms"], sourceID) else { return nil }; return key
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { throw PotetoError.projectState }
+        let rendererKey = "electron-account-renderer-state-v1"
+        guard !root.keys.contains(where: { $0 != rendererKey && $0.hasPrefix("electron-account-renderer-state-") }) else { throw PotetoError.projectState }
+        func requireEmptyLayout() throws {
+            for key in ["local-projects", "thread-project-assignments", "project-appearances", "project-files",
+                        "sidebar-project-thread-orders", "thread-workspace-root-hints", "thread-projectless-output-directories",
+                        "electron-workspace-root-labels", "project-writable-roots", "thread-writable-roots", "thread-project-membership-host-ids"] {
+                if let value = root[key] { guard let values = value as? [String: Any], values.isEmpty else { throw PotetoError.projectState } }
             }
-            guard candidates.count == 1, let slot = inactive[candidates[0]] as? [String: Any],
-                  let globals = slot["globals"] as? [String: Any] else { throw PotetoError.projectState }
-            sourceGlobals = globals; sourcePath = statePath + [candidates[0], "globals"]
-        } else { throw PotetoError.projectState }
+            for key in ["project-order", "pinned-project-ids", "projectless-thread-ids", "active-workspace-roots", "electron-saved-workspace-roots"] {
+                if let value = root[key] { guard let values = value as? [String], values.isEmpty else { throw PotetoError.projectState } }
+            }
+            if let value = root["selected-project"], !(value is NSNull) {
+                guard let value = value as? String, value.isEmpty else { throw PotetoError.projectState }
+            }
+        }
+        guard let renderer = root[rendererKey] else {
+            try requireEmptyLayout()
+            return nil
+        }
+        guard let state = renderer as? [String: Any], let inactive = state["inactive"] as? [String: Any],
+              state.keys.contains("owner") else { throw PotetoError.projectState }
+        if state["owner"] is NSNull && inactive.isEmpty {
+            try requireEmptyLayout()
+            return nil
+        }
+        guard let source else { throw PotetoError.projectState }
+        let sourceID = try NativeAccountDescriptor(auth: source), targetID = try NativeAccountDescriptor(auth: target)
+        let statePath = [rendererKey, "inactive"]
+        var locations: [(atoms: Any?, globals: [String: Any], path: [String])] = []
+        if let owner = state["owner"] as? String {
+            guard safeLabel(owner) != nil, inactive[owner] == nil,
+                  let atoms = root["electron-persisted-atom-state"] as? [String: Any],
+                  let identity = atoms["local-document-identity"] as? [String: Any],
+                  safeLabel(identity["accountId"]) != nil, safeLabel(identity["userId"]) != nil else { throw PotetoError.projectState }
+            locations.append((atoms, root, []))
+        } else if !(state["owner"] is NSNull) { throw PotetoError.projectState }
+        for (key, value) in inactive {
+            guard let slot = value as? [String: Any],
+                  matches(slot["atoms"], sourceID) || matches(slot["atoms"], targetID) else { continue }
+            guard safeLabel(key) != nil, let globals = slot["globals"] as? [String: Any] else { throw PotetoError.projectState }
+            locations.append((slot["atoms"], globals, statePath + [key, "globals"]))
+        }
+        let sources = locations.filter { matches($0.atoms, sourceID) }
+        guard sources.count == 1 else { throw PotetoError.projectState }
+        let sourceGlobals = sources[0].globals, sourcePath = sources[0].path
         let layout = try LocalProjectLayout(sourceGlobals)
-        _ = try LocalProjectLayout.merged([:], sourceGlobals)
         if sourceID == targetID {
-            guard !(state["owner"] is NSNull) else { throw PotetoError.projectState }
+            guard sourcePath.isEmpty else { throw PotetoError.projectState }
             _ = try LocalProjectLayout.merged(sourceGlobals, sourceGlobals)
             return nil
         }
-        let candidates = inactive.compactMap { key, value -> String? in
-            guard let slot = value as? [String: Any], matches(slot["atoms"], targetID) else { return nil }; return key
-        }
+        _ = try LocalProjectLayout.merged([:], sourceGlobals, policy: .accountSwitch)
+        let candidates = locations.filter { matches($0.atoms, targetID) }
         if candidates.isEmpty {
             if layout.projects.isEmpty { return nil }
             throw PotetoError.projectNeedsInitialization
         }
-        guard candidates.count == 1, let slot = inactive[candidates[0]] as? [String: Any],
-              let globals = slot["globals"] as? [String: Any], sourceID != targetID else { throw PotetoError.projectState }
-        _ = try LocalProjectLayout.merged(globals, sourceGlobals)
-        if layout.projects.isEmpty { return nil }
-        return try merge(data, targetPath: statePath + [candidates[0], "globals"], sourceData: data, sourcePath: sourcePath)
+        guard candidates.count == 1 else { throw PotetoError.projectState }
+        if layout.projects.isEmpty {
+            _ = try LocalProjectLayout.merged(candidates[0].globals, sourceGlobals, policy: .accountSwitch)
+            return nil
+        }
+        return try merge(data, targetPath: candidates[0].path, sourceData: data, sourcePath: sourcePath, policy: .accountSwitch)
     }
 }
 
@@ -1047,8 +1101,7 @@ func activateAccount(_ auth: AuthBundle, authURL: URL, isRunning: () -> Bool = n
     var stateVersion: PrivateSnapshot?
     if let version = try NativeStateFile.snapshot(stateURL) {
         let data = try NativeStateFile.read(stateURL, expected: version)
-        guard let previous else { throw PotetoError.projectState }
-        if let updated = try NativeProjectState.prepare(data, source: AuthBundle(data: previous), target: auth), updated != data {
+        if let updated = try NativeProjectState.prepare(data, source: previous.map { AuthBundle(data: $0) }, target: auth), updated != data {
             if isRunning() { throw PotetoError.running }
             guard try PrivateFiles.snapshot(authURL) == before else { throw PotetoError.changed }
             try NativeStateFile.write(updated, to: stateURL, expected: version); prepared = true

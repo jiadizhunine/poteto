@@ -45,7 +45,7 @@ def inspect(app: Path, source_root: Path) -> ReleaseArtifact:
         raise ValueError("unexpected bundle identity or executable")
     version = info.get("CFBundleShortVersionString")
     minimum = info.get("LSMinimumSystemVersion")
-    if version != "1.0.2" or not isinstance(minimum, str) or not re.fullmatch(r"\d+(?:\.\d+){1,2}", minimum):
+    if version != "1.0.3" or not isinstance(minimum, str) or not re.fullmatch(r"\d+(?:\.\d+){1,2}", minimum):
         raise ValueError("unexpected bundle version or minimum OS")
     command("/usr/bin/codesign", "--verify", "--strict", "-R", REQUIREMENT, str(app))
     binary = app / "Contents/MacOS/poteto"

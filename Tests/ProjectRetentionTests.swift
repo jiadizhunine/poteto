@@ -53,7 +53,9 @@ struct ProjectRetentionTests {
     }
     static func select(_ data: Data, _ owner: String) throws -> Data {
         var root = try object(data), state = root["electron-account-renderer-state-v1"] as! [String: Any], inactive = state["inactive"] as! [String: Any]
-        let keys = ["local-projects", "project-order", "sidebar-project-thread-orders", "thread-project-assignments", "project-appearances", "selected-project", "untouched"]
+        let keys = ["local-projects", "project-order", "sidebar-project-thread-orders", "thread-project-assignments",
+                    "project-appearances", "project-files", "pinned-project-ids", "thread-workspace-root-hints",
+                    "thread-projectless-output-directories", "projectless-thread-ids", "selected-project", "untouched"]
         if let current = state["owner"] as? String {
             var g: [String: Any] = [:]; for key in keys { g[key] = root[key]; root.removeValue(forKey: key) }
             inactive[current] = ["atoms": root["electron-persisted-atom-state"]!, "globals": g]
@@ -81,6 +83,11 @@ struct ProjectRetentionTests {
         let rootB = try object(selectedB), projectsB = rootB["local-projects"] as! [String: Any]
         precondition(Set(projectsB.keys) == ["a", "b"] && rootB["selected-project"] as? String == "b")
         precondition((try! object(prepared))["local-projects"] as! NSDictionary == (state()["local-projects"] as! NSDictionary))
+        try activateAccount(a, authURL: authURL, isRunning: { false })
+        let returnedWithoutOpen = try object(Data(contentsOf: stateURL))
+        precondition(Set((returnedWithoutOpen["local-projects"] as! [String: Any]).keys) == ["a", "b"])
+        precondition(try! Data(contentsOf: authURL) == a.data)
+        try write(b.data, authURL)
         try write(selectedB, stateURL, 0o644)
         try activateAccount(a, authURL: authURL, isRunning: { false })
         let selectedA = try object(select(Data(contentsOf: stateURL), "owner-A"))
@@ -102,15 +109,33 @@ struct ProjectRetentionTests {
         try rejected(json(sameOwner))
         for (key, value) in [
             ("project-order", ["ghost"] as Any), ("sidebar-project-thread-orders", ["ghost": ["threadIds": []]] as Any),
-            ("thread-project-assignments", ["thread": ["projectKind": "local", "projectId": "ghost"]] as Any),
             ("project-appearances", ["ghost": ["color": "blue"]] as Any), ("project-files", ["ghost": []] as Any),
             ("pinned-project-ids", ["ghost"] as Any)
         ] {
             var empty = state()
             for field in ["local-projects", "project-order", "sidebar-project-thread-orders", "thread-project-assignments", "project-appearances"] { empty.removeValue(forKey: field) }
             empty[key] = value
-            try rejected(json(empty))
+            let bytes = try json(empty)
+            try write(a.data, authURL); try write(bytes, stateURL, 0o644)
+            try activateAccount(b, authURL: authURL, isRunning: { false })
+            precondition(try! Data(contentsOf: authURL) == b.data)
+            precondition(try! Data(contentsOf: stateURL) == bytes)
         }
+        var orphan = state()
+        orphan["thread-project-assignments"] = ["thread": ["projectKind": "local", "projectId": "ghost"]]
+        try rejected(json(orphan))
+        let freshProfiles: [[String: Any]] = [
+            ["local-projects": [:], "project-order": [], "unrelated": "keep"],
+            ["electron-account-renderer-state-v1": ["owner": NSNull(), "inactive": [:]], "selected-project": NSNull()]
+        ]
+        for profile in freshProfiles {
+            let fresh = try json(profile)
+            try fm.removeItem(at: authURL); try write(fresh, stateURL, 0o644)
+            try activateAccount(b, authURL: authURL, isRunning: { false })
+            precondition(try! Data(contentsOf: authURL) == b.data)
+            precondition(try! Data(contentsOf: stateURL) == fresh)
+        }
+        try rejected(json(globals("a")))
         var empty = state()
         for field in ["local-projects", "project-order", "sidebar-project-thread-orders", "thread-project-assignments", "project-appearances"] { empty.removeValue(forKey: field) }
         try write(a.data, authURL); try write(json(empty), stateURL, 0o644)
@@ -157,7 +182,12 @@ struct ProjectRetentionTests {
         boolConflict["project-appearances"] = ["a": ["flag": true]]
         boolGlobals["project-appearances"] = ["a": ["flag": 1]]
         boolSlot["globals"] = boolGlobals; boolSlots["owner-B"] = boolSlot; boolRenderer["inactive"] = boolSlots; boolConflict["electron-account-renderer-state-v1"] = boolRenderer
-        try rejected(json(boolConflict))
+        let boolBytes = try json(boolConflict)
+        do {
+            _ = try NativeProjectState.merge(boolBytes, targetPath: ["electron-account-renderer-state-v1", "inactive", "owner-B", "globals"],
+                                             sourceData: boolBytes, sourcePath: [])
+            fatalError("strict recovery accepted different metadata")
+        } catch PotetoError.projectState { }
         let base = String(data: try json(state()), encoding: .utf8)!
         for literal in ["9007199254740993", "1.2345678901234567890123456789", "5e-324", "-0"] {
             let input = Data(base.replacingOccurrences(of: "\"other\":1", with: "\"other\":\(literal)").utf8)
@@ -198,7 +228,11 @@ struct ProjectRetentionTests {
         for field in ["project-order", "pinned-project-ids", "sidebar-project-thread-orders"] {
             var unknown = remoteSource
             unknown[field] = field == "sidebar-project-thread-orders" ? ["unknown": ["threadIds": []]] : ["unknown"]
-            try rejected(json(unknown))
+            let output = try NativeProjectState.prepare(json(unknown), source: a, target: b)!
+            let selected = try object(select(output, "owner-B"))
+            precondition((selected["project-order"] as? [String])?.contains("unknown") == false)
+            precondition((selected["pinned-project-ids"] as? [String])?.contains("unknown") != true)
+            precondition((selected["sidebar-project-thread-orders"] as? [String: Any])?["unknown"] == nil)
         }
         let rootMerged = try NativeProjectState.merge(try json(globals("b")), targetPath: [], sourceData: remoteSourceBytes, sourcePath: [])
         let rootResult = try object(rootMerged)
@@ -215,7 +249,7 @@ struct ProjectRetentionTests {
         let conflictingNumeric = Data(String(decoding: numericSource, as: UTF8.self).replacingOccurrences(of: "1.2345678901234567890123456789", with: "1.2345678901234567890123456788").utf8)
         do { _ = try NativeProjectState.merge(conflictingNumeric, targetPath: [], sourceData: numericSource, sourcePath: []); fatalError("numeric conflict accepted") } catch PotetoError.projectState { }
         var conflict = state(), renderer = conflict["electron-account-renderer-state-v1"] as! [String: Any], inactive = renderer["inactive"] as! [String: Any], slot = inactive["owner-B"] as! [String: Any], target = slot["globals"] as! [String: Any]
-        var changedProject = project("a"); changedProject["name"] = "different"; target["local-projects"] = ["a": changedProject]; slot["globals"] = target; inactive["owner-B"] = slot; renderer["inactive"] = inactive; conflict["electron-account-renderer-state-v1"] = renderer
+        var changedProject = project("a"); changedProject["rootPaths"] = ["/synthetic/different"]; target["local-projects"] = ["a": changedProject]; slot["globals"] = target; inactive["owner-B"] = slot; renderer["inactive"] = inactive; conflict["electron-account-renderer-state-v1"] = renderer
         try write(a.data, authURL); try write(json(conflict), stateURL, 0o644)
         do { try activateAccount(b, authURL: authURL, isRunning: { false }); fatalError("conflict accepted") } catch PotetoError.projectState { }
         precondition(try! Data(contentsOf: authURL) == a.data)
@@ -229,8 +263,11 @@ struct ProjectRetentionTests {
         var threadConflict = state(), rs = threadConflict["electron-account-renderer-state-v1"] as! [String: Any], slots = rs["inactive"] as! [String: Any], bs = slots["owner-B"] as! [String: Any], bg = bs["globals"] as! [String: Any]
         bg["thread-project-assignments"] = ["thread-a": ["projectKind": "local", "projectId": "b"]]; bs["globals"] = bg; slots["owner-B"] = bs; rs["inactive"] = slots; threadConflict["electron-account-renderer-state-v1"] = rs
         try write(json(threadConflict), stateURL, 0o644)
-        do { try activateAccount(b, authURL: authURL, isRunning: { false }); fatalError("thread conflict accepted") } catch PotetoError.projectState { }
-        precondition(try! Data(contentsOf: authURL) == a.data)
+        try activateAccount(b, authURL: authURL, isRunning: { false })
+        let movedLayout = try object(select(Data(contentsOf: stateURL), "owner-B"))
+        precondition((movedLayout["thread-project-assignments"] as? [String: [String: String]])?["thread-a"]?["projectId"] == "b")
+        precondition(try! Data(contentsOf: authURL) == b.data)
+        try write(a.data, authURL)
         try fm.removeItem(at: stateURL); let linkTarget = dir.appendingPathComponent("link-target")
         try write(json(state()), linkTarget, 0o644); try fm.createSymbolicLink(at: stateURL, withDestinationURL: linkTarget)
         do { try activateAccount(b, authURL: authURL, isRunning: { false }); fatalError("symlink accepted") } catch PotetoError.projectState { }
