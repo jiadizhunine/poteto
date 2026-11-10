@@ -599,7 +599,6 @@ struct LocalProjectLayout {
         func ordered(_ a: [String], _ b: [String]) -> [String] {
             var seen = Set(a); return a + b.filter { seen.insert($0).inserted }
         }
-        if policy == .accountSwitch { _ = try strings(source["projectless-thread-ids"]) }
         guard let sourceAssignments = (source["thread-project-assignments"] ?? [:]) as? [String: Any] else { throw PotetoError.projectState }
         var remoteIDs = Set<String>()
         for value in sourceAssignments.values {
@@ -641,7 +640,8 @@ struct LocalProjectLayout {
         }
         var dest = targetAssignments
         var threads = Set<String>()
-        let projectless = Set(try strings(target["projectless-thread-ids"]))
+        let targetProjectless = target["projectless-thread-ids"]
+        let projectless = Set(try strings(targetProjectless is NSNull ? nil : targetProjectless))
         for (thread, value) in sourceAssignments {
             guard let item = value as? [String: Any], let kind = item["projectKind"] as? String,
                   let id = item["projectId"] as? String else { throw PotetoError.projectState }
@@ -841,7 +841,10 @@ enum NativeProjectState {
                 if let value = root[key] { guard let values = value as? [String: Any], values.isEmpty else { throw PotetoError.projectState } }
             }
             for key in ["project-order", "pinned-project-ids", "projectless-thread-ids", "active-workspace-roots", "electron-saved-workspace-roots"] {
-                if let value = root[key] { guard let values = value as? [String], values.isEmpty else { throw PotetoError.projectState } }
+                if let value = root[key] {
+                    if key == "projectless-thread-ids" && value is NSNull { continue }
+                    guard let values = value as? [String], values.isEmpty else { throw PotetoError.projectState }
+                }
             }
             if let value = root["selected-project"], !(value is NSNull) {
                 guard let value = value as? String, value.isEmpty else { throw PotetoError.projectState }
@@ -876,13 +879,9 @@ enum NativeProjectState {
         }
         let sources = locations.filter { matches($0.atoms, sourceID) }
         guard sources.count == 1 else { throw PotetoError.projectState }
+        if sourceID == targetID { return nil }
         let sourceGlobals = sources[0].globals, sourcePath = sources[0].path
         let layout = try LocalProjectLayout(sourceGlobals)
-        if sourceID == targetID {
-            guard sourcePath.isEmpty else { throw PotetoError.projectState }
-            _ = try LocalProjectLayout.merged(sourceGlobals, sourceGlobals)
-            return nil
-        }
         _ = try LocalProjectLayout.merged([:], sourceGlobals, policy: .accountSwitch)
         let candidates = locations.filter { matches($0.atoms, targetID) }
         if candidates.isEmpty {

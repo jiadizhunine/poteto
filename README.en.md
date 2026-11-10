@@ -14,7 +14,7 @@ poteto shows usage and reset times for official Codex subscriptions and lets you
 
 ## Install
 
-Download `poteto-v1.0.3-macos-universal.dmg` or `poteto-v1.0.3-macos-universal.zip` for v1.0.3 from [Releases](https://github.com/jiadizhunine/poteto/releases). Both packages include Apple Silicon and Intel binaries. Open the DMG or extract the ZIP, drag `poteto.app` to `/Applications` or `~/Applications`, and open it.
+Download `poteto-v1.0.4-macos-universal.dmg` or `poteto-v1.0.4-macos-universal.zip` for v1.0.4 from [Releases](https://github.com/jiadizhunine/poteto/releases). Both packages include Apple Silicon and Intel binaries. Open the DMG or extract the ZIP, drag `poteto.app` to `/Applications` or `~/Applications`, and open it.
 
 If macOS blocks the first launch, try opening the app, then go to **System Settings → Privacy & Security** and select **Open Anyway**. See [Apple's app-opening instructions](https://support.apple.com/en-us/102445).
 
@@ -36,7 +36,7 @@ When all ordinary usage windows are full and the reset timer has not started, po
 
 When you switch to an account that ChatGPT has already initialized, poteto merges local projects and thread assignments automatically. The destination keeps its existing project names, appearances, order, and thread assignments. Switching preserves both accounts' projects, chat history, model, and reasoning settings.
 
-To bring local projects to a new account, sign in to the destination account once in ChatGPT. Then use poteto to switch to it from the account with the projects. Cloud projects stay with their original account. poteto flags conflicting project folders.
+To bring local projects to a new account, sign in to the destination account once in ChatGPT. Quit ChatGPT and Codex. In poteto, switch to the account with the projects, then switch to the destination account. Cloud projects stay with their original account. poteto flags conflicting project folders.
 
 If the project sidebar is empty after switching, recover local projects and thread assignments from an account layout saved on this Mac. Use `--project-status` to inspect layouts. Quit ChatGPT and Codex before running `--restore-projects`. [See the recovery steps](.agents/skills/poteto/references/project-recovery.md)
 

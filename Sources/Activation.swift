@@ -212,7 +212,7 @@ enum NativeActivation {
                 if let method = frame["method"] as? String, method.hasPrefix("turn/") || method.hasPrefix("item/") { pending.append(frame) }
             }
         }
-        let initialization = try call("initialize", ["clientInfo": ["name": "poteto", "title": "poteto", "version": "1.0.3"], "capabilities": ["experimentalApi": true]])
+        let initialization = try call("initialize", ["clientInfo": ["name": "poteto", "title": "poteto", "version": "1.0.4"], "capabilities": ["experimentalApi": true]])
         guard (initialization["codexHome"] as? String).map({ URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath().path }) == scratch.standardizedFileURL.resolvingSymlinksInPath().path else { throw PotetoError.malformed }
         try send("initialized", [:], id: nil)
         let configResponse = try call("config/read", ["includeLayers": false])

@@ -83,6 +83,8 @@ struct ProjectRetentionTests {
         let rootB = try object(selectedB), projectsB = rootB["local-projects"] as! [String: Any]
         precondition(Set(projectsB.keys) == ["a", "b"] && rootB["selected-project"] as? String == "b")
         precondition((try! object(prepared))["local-projects"] as! NSDictionary == (state()["local-projects"] as! NSDictionary))
+        try activateAccount(b, authURL: authURL, isRunning: { false })
+        precondition(try! Data(contentsOf: stateURL) == prepared)
         try activateAccount(a, authURL: authURL, isRunning: { false })
         let returnedWithoutOpen = try object(Data(contentsOf: stateURL))
         precondition(Set((returnedWithoutOpen["local-projects"] as! [String: Any]).keys) == ["a", "b"])
@@ -126,7 +128,7 @@ struct ProjectRetentionTests {
         try rejected(json(orphan))
         let freshProfiles: [[String: Any]] = [
             ["local-projects": [:], "project-order": [], "unrelated": "keep"],
-            ["electron-account-renderer-state-v1": ["owner": NSNull(), "inactive": [:]], "selected-project": NSNull()]
+            ["electron-account-renderer-state-v1": ["owner": NSNull(), "inactive": [:]], "selected-project": NSNull(), "projectless-thread-ids": NSNull()]
         ]
         for profile in freshProfiles {
             let fresh = try json(profile)
@@ -151,8 +153,7 @@ struct ProjectRetentionTests {
             same[field] = field == "project-order" ? ["ghost"] : ["remote": ["projectKind": "local", "projectId": "remote-id"]]
             let bytes = try json(same)
             try write(a.data, authURL); try write(bytes, stateURL, 0o644)
-            do { try activateAccount(a, authURL: authURL, isRunning: { false }); fatalError("same-identity invalid layout accepted") }
-            catch PotetoError.projectState { }
+            try activateAccount(a, authURL: authURL, isRunning: { false })
             precondition(try! Data(contentsOf: authURL) == a.data)
             precondition(try! Data(contentsOf: stateURL) == bytes)
         }
@@ -261,11 +262,14 @@ struct ProjectRetentionTests {
         try write(json(wrong), stateURL, 0o644)
         do { try activateAccount(b, authURL: authURL, isRunning: { false }); fatalError("wrong source accepted") } catch PotetoError.projectState { }
         var threadConflict = state(), rs = threadConflict["electron-account-renderer-state-v1"] as! [String: Any], slots = rs["inactive"] as! [String: Any], bs = slots["owner-B"] as! [String: Any], bg = bs["globals"] as! [String: Any]
+        threadConflict["projectless-thread-ids"] = NSNull()
+        bg["projectless-thread-ids"] = NSNull()
         bg["thread-project-assignments"] = ["thread-a": ["projectKind": "local", "projectId": "b"]]; bs["globals"] = bg; slots["owner-B"] = bs; rs["inactive"] = slots; threadConflict["electron-account-renderer-state-v1"] = rs
         try write(json(threadConflict), stateURL, 0o644)
         try activateAccount(b, authURL: authURL, isRunning: { false })
         let movedLayout = try object(select(Data(contentsOf: stateURL), "owner-B"))
         precondition((movedLayout["thread-project-assignments"] as? [String: [String: String]])?["thread-a"]?["projectId"] == "b")
+        precondition(movedLayout["projectless-thread-ids"] is NSNull)
         precondition(try! Data(contentsOf: authURL) == b.data)
         try write(a.data, authURL)
         try fm.removeItem(at: stateURL); let linkTarget = dir.appendingPathComponent("link-target")
@@ -280,7 +284,7 @@ struct ProjectRetentionTests {
         try write(a.data, authURL)
         var nullRoot = state(), nullState = nullRoot["electron-account-renderer-state-v1"] as! [String: Any], nullSlots = nullState["inactive"] as! [String: Any]
         nullSlots["owner-A"] = ["atoms": atom("A"), "globals": globals("a")]; nullState["owner"] = NSNull(); nullState["inactive"] = nullSlots; nullRoot["electron-account-renderer-state-v1"] = nullState
-        do { _ = try NativeProjectState.prepare(json(nullRoot), source: a, target: a); fatalError("same null-owner slot accepted") } catch PotetoError.projectState { }
+        precondition(try! NativeProjectState.prepare(json(nullRoot), source: a, target: a) == nil)
         try write(json(nullRoot), stateURL, 0o644); try activateAccount(b, authURL: authURL, isRunning: { false })
         let nullPrepared = try object(Data(contentsOf: stateURL)), nullRenderer = nullPrepared["electron-account-renderer-state-v1"] as! [String: Any], nullInactive = nullRenderer["inactive"] as! [String: Any], nullB = nullInactive["owner-B"] as! [String: Any], nullGlobals = nullB["globals"] as! [String: Any]
         precondition(nullRenderer["owner"] is NSNull)
