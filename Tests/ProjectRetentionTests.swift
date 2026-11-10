@@ -118,7 +118,9 @@ struct ProjectRetentionTests {
         precondition(try! Data(contentsOf: authURL) == b.data)
         var emptyMissing = empty, emptyMissingState = emptyMissing["electron-account-renderer-state-v1"] as! [String: Any]
         emptyMissingState["inactive"] = [:]; emptyMissing["electron-account-renderer-state-v1"] = emptyMissingState
-        try rejected(json(emptyMissing))
+        try write(a.data, authURL); try write(json(emptyMissing), stateURL, 0o644)
+        try activateAccount(b, authURL: authURL, isRunning: { false })
+        precondition(try! Data(contentsOf: authURL) == b.data)
         for field in ["project-order", "thread-project-assignments"] {
             var same = state()
             same[field] = field == "project-order" ? ["ghost"] : ["remote": ["projectKind": "local", "projectId": "remote-id"]]
@@ -220,7 +222,7 @@ struct ProjectRetentionTests {
         var missing = state(), missingState = missing["electron-account-renderer-state-v1"] as! [String: Any]
         missingState["inactive"] = [:]; missing["electron-account-renderer-state-v1"] = missingState
         try write(json(missing), stateURL, 0o644)
-        do { try activateAccount(b, authURL: authURL, isRunning: { false }); fatalError("missing target accepted") } catch PotetoError.projectState { }
+        do { try activateAccount(b, authURL: authURL, isRunning: { false }); fatalError("missing target accepted") } catch PotetoError.projectNeedsInitialization { }
         var wrong = state(); wrong["electron-persisted-atom-state"] = atom("C")
         try write(json(wrong), stateURL, 0o644)
         do { try activateAccount(b, authURL: authURL, isRunning: { false }); fatalError("wrong source accepted") } catch PotetoError.projectState { }
@@ -280,6 +282,110 @@ struct ProjectRetentionTests {
             }); fatalError("post-auth state race accepted")
         } catch PotetoError.projectPartial { }
         precondition(try! Data(contentsOf: authURL) == b.data)
+        try recoveryTests(dir: dir, authURL: authURL, stateURL: stateURL, write: write)
         print("Synthetic project inheritance tests passed")
     }
+    static func recoveryTests(dir: URL, authURL: URL, stateURL: URL, write: (Data, URL, Int) throws -> Void) throws {
+        let backup = dir.appendingPathComponent("backups"), a = try bundle("A")
+        let initial = try json(state())
+        try write(a.data, authURL, 0o600); try write(initial, stateURL, 0o644)
+        let status = try ProjectRecovery.status(authURL: authURL, isRunning: { true })
+        precondition(status.nativeClientRunning && status.localProjects == 1 && status.localAssignments == 1)
+        precondition(status.sources.count == 1 && status.sources[0].slot == "owner-B")
+        let report = String(data: try JSONEncoder().encode(status), encoding: .utf8)!
+        precondition(!report.contains("fake") && !report.contains("/synthetic") && !report.contains("thread-b"))
+        do { _ = try ProjectRecovery.restore(authURL: authURL, backupDirectory: backup, isRunning: { true }); fatalError("running accepted") } catch PotetoError.running { }
+        precondition(try! Data(contentsOf: stateURL) == initial)
+        let result = try ProjectRecovery.restore(authURL: authURL, backupDirectory: backup, isRunning: { false })
+        precondition(result.restored && result.localProjects == 2 && result.localAssignments == 2)
+        let files = try FileManager.default.contentsOfDirectory(at: backup, includingPropertiesForKeys: nil)
+        precondition(files.count == 1 && (try! Data(contentsOf: files[0])) == initial)
+        let attrs = try FileManager.default.attributesOfItem(atPath: files[0].path)
+        precondition((attrs[.posixPermissions] as! NSNumber).intValue == 0o600)
+        let restored = try Data(contentsOf: stateURL)
+        let root = try object(restored)
+        precondition(Set((root["local-projects"] as! [String: Any]).keys) == ["a", "b"])
+        precondition(try! Data(contentsOf: authURL) == a.data)
+        let repeated = try ProjectRecovery.restore(authURL: authURL, backupDirectory: backup, isRunning: { false })
+        precondition(!repeated.restored && (try! Data(contentsOf: stateURL)) == restored)
+        do { _ = try ProjectRecovery.restore(authURL: authURL, backupDirectory: backup, sourceSlot: "missing", isRunning: { false }); fatalError("unknown source accepted") } catch PotetoError.projectSource { }
+        var ambiguous = state(), renderer = ambiguous["electron-account-renderer-state-v1"] as! [String: Any]
+        var slots = renderer["inactive"] as! [String: Any]
+        slots.removeValue(forKey: "other")
+        slots["owner-C"] = ["atoms": atom("C"), "globals": globals("c")]
+        renderer["inactive"] = slots; ambiguous["electron-account-renderer-state-v1"] = renderer
+        let ambiguousBytes = try json(ambiguous); try write(ambiguousBytes, stateURL, 0o644)
+        do { _ = try ProjectRecovery.restore(authURL: authURL, backupDirectory: backup, isRunning: { false }); fatalError("ambiguous sources accepted") } catch PotetoError.projectAmbiguous { }
+        precondition(try! Data(contentsOf: stateURL) == ambiguousBytes)
+        let selected = try ProjectRecovery.restore(authURL: authURL, backupDirectory: backup, sourceSlot: "owner-C", isRunning: { false })
+        precondition(selected.restored && selected.sourceSlot == "owner-C")
+        var mixed = state(), mixedRenderer = mixed["electron-account-renderer-state-v1"] as! [String: Any]
+        var mixedSlots = mixedRenderer["inactive"] as! [String: Any]
+        mixedSlots.removeValue(forKey: "other")
+        mixedSlots["owner-B"] = ["atoms": atom("B"), "globals": globals("a")]
+        mixedSlots["owner-C"] = ["atoms": atom("C"), "globals": globals("c")]
+        mixedRenderer["inactive"] = mixedSlots; mixed["electron-account-renderer-state-v1"] = mixedRenderer
+        try write(json(mixed), stateURL, 0o644)
+        do { _ = try ProjectRecovery.restore(authURL: authURL, backupDirectory: backup, isRunning: { false }); fatalError("no-op and changing sources accepted") } catch PotetoError.projectAmbiguous { }
+        var precise = state(), preciseRenderer = precise["electron-account-renderer-state-v1"] as! [String: Any]
+        var preciseSlots = preciseRenderer["inactive"] as! [String: Any]
+        preciseSlots.removeValue(forKey: "other")
+        var left = globals("b"), right = globals("b")
+        left["project-appearances"] = ["b": ["value": "BIG_ONE"]]
+        right["project-appearances"] = ["b": ["value": "BIG_TWO"]]
+        preciseSlots["owner-B"] = ["atoms": atom("B"), "globals": left]
+        preciseSlots["owner-C"] = ["atoms": atom("C"), "globals": right]
+        preciseRenderer["inactive"] = preciseSlots; precise["electron-account-renderer-state-v1"] = preciseRenderer
+        let preciseText = String(data: try json(precise), encoding: .utf8)!
+            .replacingOccurrences(of: "\"BIG_ONE\"", with: "9007199254740992")
+            .replacingOccurrences(of: "\"BIG_TWO\"", with: "9007199254740993")
+        try write(Data(preciseText.utf8), stateURL, 0o644)
+        do { _ = try ProjectRecovery.restore(authURL: authURL, backupDirectory: backup, isRunning: { false }); fatalError("distinct numeric bytes accepted") } catch PotetoError.projectAmbiguous { }
+        var none = state(), noneRenderer = none["electron-account-renderer-state-v1"] as! [String: Any]
+        for key in ["local-projects", "project-order", "thread-project-assignments", "project-appearances", "sidebar-project-thread-orders"] { none.removeValue(forKey: key) }
+        noneRenderer["inactive"] = [:]; none["electron-account-renderer-state-v1"] = noneRenderer
+        try write(json(none), stateURL, 0o644)
+        do { _ = try ProjectRecovery.restore(authURL: authURL, backupDirectory: backup, isRunning: { false }); fatalError("empty state without source accepted") } catch PotetoError.projectSource { }
+        var unsafe = state(), unsafeRenderer = unsafe["electron-account-renderer-state-v1"] as! [String: Any]
+        var unsafeSlots = unsafeRenderer["inactive"] as! [String: Any]
+        unsafeSlots["unsafe\nslot"] = unsafeSlots.removeValue(forKey: "owner-B")
+        unsafeRenderer["inactive"] = unsafeSlots; unsafe["electron-account-renderer-state-v1"] = unsafeRenderer
+        try write(json(unsafe), stateURL, 0o644)
+        let unsafeStatus = try ProjectRecovery.status(authURL: authURL, isRunning: { false })
+        precondition(unsafeStatus.sources.isEmpty)
+        do { _ = try ProjectRecovery.restore(authURL: authURL, backupDirectory: backup, sourceSlot: "unsafe\nslot", isRunning: { false }); fatalError("unsafe slot accepted") } catch PotetoError.projectSource { }
+        var conflicting = state(), conflictRenderer = conflicting["electron-account-renderer-state-v1"] as! [String: Any]
+        var conflictSlots = conflictRenderer["inactive"] as! [String: Any], conflictSlot = conflictSlots["owner-B"] as! [String: Any]
+        var conflictGlobals = globals("b"), conflictProject = project("a")
+        conflictProject["name"] = "different"; conflictGlobals["local-projects"] = ["a": conflictProject, "b": project("b")]
+        conflictSlot["globals"] = conflictGlobals; conflictSlots["owner-B"] = conflictSlot
+        conflictRenderer["inactive"] = conflictSlots; conflicting["electron-account-renderer-state-v1"] = conflictRenderer
+        try write(json(conflicting), stateURL, 0o644)
+        do { _ = try ProjectRecovery.restore(authURL: authURL, backupDirectory: backup, isRunning: { false }); fatalError("conflict ignored") } catch PotetoError.projectState { }
+        try write(initial, stateURL, 0o644)
+        let backupCount = try FileManager.default.contentsOfDirectory(at: backup, includingPropertiesForKeys: nil).count
+        var race = 0
+        do {
+            _ = try ProjectRecovery.restore(authURL: authURL, backupDirectory: backup, isRunning: {
+                race += 1
+                if race == 2 { try! write(Data("external".utf8), stateURL, 0o644) }
+                return false
+            }); fatalError("state race accepted")
+        } catch PotetoError.changed { }
+        precondition(try! Data(contentsOf: stateURL) == Data("external".utf8))
+        precondition((try! FileManager.default.contentsOfDirectory(at: backup, includingPropertiesForKeys: nil)).count == backupCount)
+        var bad = state(); bad["electron-persisted-atom-state"] = atom("C")
+        try write(json(bad), stateURL, 0o644)
+        do { _ = try ProjectRecovery.status(authURL: authURL, isRunning: { false }); fatalError("wrong identity accepted") } catch PotetoError.projectState { }
+        var nullRoot = state(), nullState = nullRoot["electron-account-renderer-state-v1"] as! [String: Any]
+        var nullSlots = nullState["inactive"] as! [String: Any]
+        nullSlots["owner-A"] = ["atoms": atom("A"), "globals": globals("a")]
+        nullState["owner"] = NSNull(); nullState["inactive"] = nullSlots; nullRoot["electron-account-renderer-state-v1"] = nullState
+        try write(json(nullRoot), stateURL, 0o644)
+        let nullResult = try ProjectRecovery.restore(authURL: authURL, backupDirectory: backup, isRunning: { false })
+        precondition(nullResult.restored && nullResult.localProjects == 2)
+        let selectedRoot = try object(select(Data(contentsOf: stateURL), "owner-A"))
+        precondition(Set((selectedRoot["local-projects"] as! [String: Any]).keys) == ["a", "b"])
+    }
+
 }

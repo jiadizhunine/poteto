@@ -239,7 +239,9 @@ actor Monitor {
         guard try PrivateFiles.read(authURL) == before else { throw PotetoError.changed }
         try capture()
         guard try vault.accounts.first(where: { try $0.auth.identity.id == id })?.auth == auth else { throw PotetoError.changed }
-        try activateAccount(auth, authURL: authURL, isRunning: isNativeRunning)
+        try withProjectStateLock(in: statusURL.deletingLastPathComponent()) {
+            try activateAccount(auth, authURL: authURL, isRunning: isNativeRunning)
+        }
         usages[id] = usage; errors[id] = nil
         try capture()
         return view()
@@ -267,6 +269,53 @@ actor Monitor {
 }
 
 func publicError(_ error: Error) -> String { (error as? PotetoError)?.errorDescription ?? "操作未完成，请稍后重试；未输出私有凭据。" }
+
+private func withProjectStateLock<T>(in directory: URL, _ operation: () throws -> T) throws -> T {
+    let lock = try InstanceLock(directory.appendingPathComponent("project-state.lock"))
+    return try withExtendedLifetime(lock, operation)
+}
+
+enum ProjectCommand {
+    enum UsageError: LocalizedError {
+        case invalidArguments
+        var errorDescription: String? {
+            "用法：--project-status [--codex-home PATH] 或 --restore-projects [--from SLOT] [--codex-home PATH]"
+        }
+    }
+
+    static func run(_ arguments: [String], home: URL = nativeHome, support: URL = supportURL,
+                    isRunning: () -> Bool = nativeClientIsRunning) throws -> Data? {
+        guard let mode = arguments.first, ["--project-status", "--restore-projects"].contains(mode) else { return nil }
+        var profile: URL?
+        var source: String?
+        var options = arguments.dropFirst().makeIterator()
+        while let flag = options.next() {
+            guard let value = options.next(), !value.hasPrefix("--") else { throw UsageError.invalidArguments }
+            switch flag {
+            case "--codex-home" where profile == nil && value.hasPrefix("/") && !value.contains("\0"):
+                profile = URL(fileURLWithPath: value, isDirectory: true).standardizedFileURL
+            case "--from" where mode == "--restore-projects" && source == nil:
+                guard let slot = safeLabel(value) else { throw UsageError.invalidArguments }
+                source = slot
+            default:
+                throw UsageError.invalidArguments
+            }
+        }
+        let auth = (profile ?? home).appendingPathComponent("auth.json")
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        if mode == "--project-status" {
+            return try encoder.encode(ProjectRecovery.status(authURL: auth, isRunning: isRunning))
+        }
+        if isRunning() { throw PotetoError.running }
+        try PrivateFiles.directory(support)
+        return try withProjectStateLock(in: support) {
+            let backups = support.appendingPathComponent("Project Recovery", isDirectory: true)
+            let result = try ProjectRecovery.restore(authURL: auth, backupDirectory: backups, sourceSlot: source, isRunning: isRunning)
+            return try encoder.encode(result)
+        }
+    }
+}
 
 func runCommand(_ args: [String]) -> Int32 {
     let p = Process(); p.executableURL = URL(fileURLWithPath: args[0]); p.arguments = Array(args.dropFirst())
@@ -576,7 +625,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if login != nil { stopLogin(); return }
         guard alert("添加账号", detail: "", confirm: "打开登录") else { return }
         do {
-            let executable = URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex")
+            let executable = try NativeCodexCLI.locate()
             let home = supportURL.appendingPathComponent("login-\(UUID().uuidString)", isDirectory: true)
             try PrivateFiles.directory(home)
             try PrivateFiles.write(Data("cli_auth_credentials_store = \"file\"\n[analytics]\nenabled = false\n".utf8), to: home.appendingPathComponent("config.toml"))
@@ -652,6 +701,24 @@ extension AppDelegate {
 @main
 struct Poteto {
     static func main() {
+        do {
+            if let result = try ProjectCommand.run(Array(CommandLine.arguments.dropFirst())) {
+                FileHandle.standardOutput.write(result + Data("\n".utf8))
+                return
+            }
+        } catch {
+            let message: String
+            switch error as? PotetoError {
+            case .running: message = "完全退出 ChatGPT 和 Codex 后再恢复项目。"
+            case .invalidAuth: message = "项目检查需要当前账号的文件模式凭据。请先确认原生登录和 Codex 目录。"
+            case .projectState: message = "无法合并本地项目。请核对当前账号、原生项目状态和来源槽位。"
+            case .projectPartial: message = "请运行 --project-status 核对恢复结果。"
+            case .changed: message = "本机状态刚发生变化。请重新运行 --project-status。"
+            default: message = (error as? ProjectCommand.UsageError)?.errorDescription ?? publicError(error)
+            }
+            fputs(message + "\n", stderr)
+            exit(1)
+        }
         do {
             try PrivateFiles.directory(supportURL)
             if CommandLine.arguments.contains("--status") {

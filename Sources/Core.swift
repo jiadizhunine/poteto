@@ -4,10 +4,14 @@ import LocalAuthentication
 import Darwin
 
 enum PotetoError: Error, LocalizedError {
-    case invalidAuth, privateFile, changed, missingAccount, running, startupRace, network, loginRequired, wrongIdentity, malformed, projectState, projectPartial, keychain(OSStatus)
+    case invalidAuth, privateFile, changed, missingAccount, running, startupRace, network, loginRequired, wrongIdentity, malformed, projectState, projectPartial, projectNeedsInitialization, projectSource, projectAmbiguous, nativeCLIUnavailable, keychain(OSStatus)
     var errorDescription: String? {
         switch self {
         case .projectState: return "本地项目状态不受支持、身份无法确认或存在冲突；未切换账号。请先检查原生项目和目标账号。"
+        case .projectNeedsInitialization: return "目标账号尚未初始化本地项目状态；请先通过原生应用登录该账号一次，再退出应用后重试。"
+        case .projectSource: return "未找到可恢复的指定来源，或来源格式不受支持；请先查看项目状态。"
+        case .projectAmbiguous: return "存在多个不同的可恢复来源；请用 --from 指定槽位。"
+        case .nativeCLIUnavailable: return "未找到经过验证的官方 Codex 命令行工具。"
         case .projectPartial: return "目标账号的本地项目已准备，但账号切换未完成；请确认当前登录后重试。"
         case .invalidAuth: return "登录凭据格式无效；未更改原账号。"
         case .privateFile: return "凭据必须是本用户独占的普通文件，不能使用符号链接。"
@@ -185,34 +189,34 @@ enum PrivateFiles {
         var info = stat()
         guard lstat(url.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR, info.st_uid == getuid(), (info.st_mode & 0o077) == 0 else { throw PotetoError.privateFile }
     }
-    static func snapshot(_ url: URL) throws -> PrivateSnapshot? {
+    static func snapshot(_ url: URL, limit: Int = 8_388_608) throws -> PrivateSnapshot? {
         var info = stat()
         if lstat(url.path, &info) != 0 { if errno == ENOENT { return nil }; throw PotetoError.privateFile }
         guard (info.st_mode & S_IFMT) == S_IFREG, info.st_uid == getuid(), info.st_nlink == 1,
-              (info.st_mode & 0o077) == 0, info.st_size <= 8_388_608 else { throw PotetoError.privateFile }
+              (info.st_mode & 0o077) == 0, info.st_size <= limit else { throw PotetoError.privateFile }
         return PrivateSnapshot(info)
     }
-    static func read(_ url: URL) throws -> Data? {
-        guard let before = try snapshot(url) else { return nil }
+    static func read(_ url: URL, limit: Int = 8_388_608) throws -> Data? {
+        guard let before = try snapshot(url, limit: limit) else { return nil }
         let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
         guard fd >= 0 else { throw PotetoError.privateFile }; defer { close(fd) }
         var info = stat(); guard fstat(fd, &info) == 0, PrivateSnapshot(info) == before else { throw PotetoError.changed }
         var data = Data(); var buffer = [UInt8](repeating: 0, count: 16_384)
         while true {
             let n = Darwin.read(fd, &buffer, buffer.count)
-            if n == 0 { break }; guard n > 0, data.count + n <= 8_388_608 else { throw PotetoError.privateFile }
+            if n == 0 { break }; guard n > 0, data.count + n <= limit else { throw PotetoError.privateFile }
             data.append(contentsOf: buffer.prefix(n))
         }
-        guard fstat(fd, &info) == 0, PrivateSnapshot(info) == before, try snapshot(url) == before else { throw PotetoError.changed }
+        guard fstat(fd, &info) == 0, PrivateSnapshot(info) == before, try snapshot(url, limit: limit) == before else { throw PotetoError.changed }
         return data
     }
-    static func write(_ data: Data, to url: URL, expected: PrivateSnapshot? = nil, compare: Bool = false) throws {
+    static func write(_ data: Data, to url: URL, expected: PrivateSnapshot? = nil, compare: Bool = false, limit: Int = 8_388_608) throws {
         var parent = stat()
         guard lstat(url.deletingLastPathComponent().path, &parent) == 0,
               (parent.st_mode & S_IFMT) == S_IFDIR, parent.st_uid == getuid() else { throw PotetoError.privateFile }
-        let before = try snapshot(url)
+        let before = try snapshot(url, limit: limit)
         if compare && before != expected { throw PotetoError.changed }
-        guard data.count <= 8_388_608 else { throw PotetoError.privateFile }
+        guard data.count <= limit else { throw PotetoError.privateFile }
         let temp = url.deletingLastPathComponent().appendingPathComponent(".poteto-\(UUID().uuidString).tmp")
         let fd = open(temp.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else { throw PotetoError.privateFile }
@@ -224,7 +228,7 @@ enum PrivateFiles {
                 guard count > 0 else { throw PotetoError.privateFile }; offset += count
             }
         }
-        guard fsync(fd) == 0, try snapshot(url) == before else { throw PotetoError.changed }
+        guard fsync(fd) == 0, try snapshot(url, limit: limit) == before else { throw PotetoError.changed }
         guard rename(temp.path, url.path) == 0 else { throw PotetoError.privateFile }
     }
 }
@@ -828,11 +832,177 @@ enum NativeProjectState {
         let candidates = inactive.compactMap { key, value -> String? in
             guard let slot = value as? [String: Any], matches(slot["atoms"], targetID) else { return nil }; return key
         }
+        if candidates.isEmpty {
+            if layout.projects.isEmpty { return nil }
+            throw PotetoError.projectNeedsInitialization
+        }
         guard candidates.count == 1, let slot = inactive[candidates[0]] as? [String: Any],
               let globals = slot["globals"] as? [String: Any], sourceID != targetID else { throw PotetoError.projectState }
         _ = try LocalProjectLayout.merged(globals, sourceGlobals)
         if layout.projects.isEmpty { return nil }
         return try merge(data, targetPath: statePath + [candidates[0], "globals"], sourceData: data, sourcePath: sourcePath)
+    }
+}
+
+enum ProjectRecovery {
+    struct Source: Codable {
+        let slot: String
+        let localProjects: Int
+        let localAssignments: Int
+    }
+    struct Summary: Codable {
+        let nativeClientRunning: Bool
+        let localProjects: Int
+        let localAssignments: Int
+        let sources: [Source]
+    }
+    struct Result: Codable {
+        let restored: Bool
+        let sourceSlot: String?
+        let localProjects: Int
+        let localAssignments: Int
+    }
+    private struct Candidate {
+        let report: Source
+        let path: [String]
+    }
+    private struct Document {
+        let authVersion: PrivateSnapshot
+        let stateVersion: PrivateSnapshot
+        let data: Data
+        let targetPath: [String]
+        let target: [String: Any]
+        let candidates: [Candidate]
+        let incompatible: Bool
+
+        init(authURL: URL) throws {
+            guard let authVersion = try PrivateFiles.snapshot(authURL),
+                  let authData = try PrivateFiles.read(authURL),
+                  try PrivateFiles.snapshot(authURL) == authVersion else { throw PotetoError.invalidAuth }
+            let identity = try NativeAccountDescriptor(auth: AuthBundle(data: authData))
+            let stateURL = authURL.deletingLastPathComponent().appendingPathComponent(".codex-global-state.json")
+            guard let stateVersion = try NativeStateFile.snapshot(stateURL) else { throw PotetoError.projectState }
+            let data = try NativeStateFile.read(stateURL, expected: stateVersion)
+            var unique = UniqueJSONKeys(bytes: Array(data))
+            do { try unique.validate() } catch { throw PotetoError.projectState }
+            guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let state = root["electron-account-renderer-state-v1"] as? [String: Any],
+                  let inactive = state["inactive"] as? [String: Any], state.keys.contains("owner") else { throw PotetoError.projectState }
+            let base = ["electron-account-renderer-state-v1", "inactive"]
+            let target: [String: Any], targetPath: [String], currentSlot: String?
+            if let owner = state["owner"] as? String {
+                guard !owner.isEmpty, inactive[owner] == nil,
+                      NativeProjectState.matches(root["electron-persisted-atom-state"], identity) else { throw PotetoError.projectState }
+                guard !inactive.values.contains(where: { value in
+                    guard let slot = value as? [String: Any] else { return false }
+                    return NativeProjectState.matches(slot["atoms"], identity)
+                }) else { throw PotetoError.projectState }
+                target = root; targetPath = []; currentSlot = nil
+            } else if state["owner"] is NSNull {
+                let matches = inactive.keys.filter { key in
+                    guard let slot = inactive[key] as? [String: Any] else { return false }
+                    return NativeProjectState.matches(slot["atoms"], identity)
+                }
+                guard matches.count == 1, let slot = inactive[matches[0]] as? [String: Any],
+                      let globals = slot["globals"] as? [String: Any] else { throw PotetoError.projectState }
+                target = globals; targetPath = base + [matches[0], "globals"]; currentSlot = matches[0]
+            } else { throw PotetoError.projectState }
+            _ = try LocalProjectLayout.merged(target, target)
+            var candidates: [Candidate] = []
+            var incompatible = false
+            for key in inactive.keys.sorted() where key != currentSlot {
+                guard safeLabel(key) != nil, let slot = inactive[key] as? [String: Any],
+                      let atoms = slot["atoms"] as? [String: Any],
+                      let donor = atoms["local-document-identity"] as? [String: Any],
+                      let account = safeLabel(donor["accountId"]), let user = safeLabel(donor["userId"]),
+                      account != identity.accountId || user != identity.userId,
+                      let globals = slot["globals"] as? [String: Any] else { continue }
+                let count = inactive.values.filter { value in
+                    guard let other = value as? [String: Any], let atoms = other["atoms"] as? [String: Any],
+                          let id = atoms["local-document-identity"] as? [String: Any] else { return false }
+                    return id["accountId"] as? String == account && id["userId"] as? String == user
+                }.count
+                guard count == 1 else { incompatible = true; continue }
+                guard let layout = try? LocalProjectLayout(globals) else { incompatible = true; continue }
+                guard !layout.projects.isEmpty else {
+                    if (try? LocalProjectLayout.merged([:], globals)) == nil { incompatible = true }
+                    continue
+                }
+                guard (try? NativeProjectState.merge(data, targetPath: targetPath, sourceData: data, sourcePath: base + [key, "globals"])) != nil else { incompatible = true; continue }
+                candidates.append(Candidate(report: Source(slot: key, localProjects: layout.projects.count,
+                    localAssignments: try Self.assignmentCount(globals)), path: base + [key, "globals"]))
+            }
+            self.authVersion = authVersion; self.stateVersion = stateVersion; self.data = data
+            self.targetPath = targetPath; self.target = target; self.candidates = candidates; self.incompatible = incompatible
+        }
+        static func assignmentCount(_ globals: [String: Any]) throws -> Int {
+            guard let assignments = (globals["thread-project-assignments"] ?? [:]) as? [String: Any] else { throw PotetoError.projectState }
+            return assignments.values.filter { ($0 as? [String: Any])?["projectKind"] as? String == "local" }.count
+        }
+        func counts(_ data: Data) throws -> (Int, Int) {
+            var parser = UniqueJSONKeys(bytes: Array(data)); let range = try parser.range(targetPath)
+            guard let globals = try JSONSerialization.jsonObject(with: data.subdata(in: range)) as? [String: Any] else { throw PotetoError.projectState }
+            return (try LocalProjectLayout(globals).projects.count, try Self.assignmentCount(globals))
+        }
+    }
+    static func status(authURL: URL, isRunning: () -> Bool = nativeClientIsRunning) throws -> Summary {
+        let running = isRunning(), document = try Document(authURL: authURL)
+        return Summary(nativeClientRunning: running, localProjects: try LocalProjectLayout(document.target).projects.count,
+                       localAssignments: try Document.assignmentCount(document.target), sources: document.candidates.map(\.report))
+    }
+    static func restore(authURL: URL, backupDirectory: URL, sourceSlot: String? = nil,
+                        isRunning: () -> Bool = nativeClientIsRunning) throws -> Result {
+        if isRunning() { throw PotetoError.running }
+        let document = try Document(authURL: authURL)
+        var chosen: Candidate?
+        var selectedOutput: Data?
+        if let sourceSlot {
+            guard safeLabel(sourceSlot) != nil,
+                  let candidate = document.candidates.first(where: { $0.report.slot == sourceSlot }) else { throw PotetoError.projectSource }
+            chosen = candidate
+            selectedOutput = try NativeProjectState.merge(document.data, targetPath: document.targetPath,
+                                                          sourceData: document.data, sourcePath: candidate.path)
+        } else {
+            guard !document.incompatible else { throw PotetoError.projectState }
+            for candidate in document.candidates {
+                let output = try NativeProjectState.merge(document.data, targetPath: document.targetPath,
+                                                          sourceData: document.data, sourcePath: candidate.path)
+                if let selectedOutput {
+                    guard output == selectedOutput else { throw PotetoError.projectAmbiguous }
+                } else {
+                    chosen = candidate; selectedOutput = output
+                }
+            }
+        }
+        guard let chosen, let output = selectedOutput else {
+            let counts = try document.counts(document.data)
+            guard counts.0 > 0 else { throw PotetoError.projectSource }
+            return Result(restored: false, sourceSlot: sourceSlot, localProjects: counts.0, localAssignments: counts.1)
+        }
+        guard output != document.data else {
+            let counts = try document.counts(document.data)
+            return Result(restored: false, sourceSlot: sourceSlot, localProjects: counts.0, localAssignments: counts.1)
+        }
+        guard output.count <= NativeStateFile.limit else { throw PotetoError.projectState }
+        let counts = try document.counts(output)
+        let stateURL = authURL.deletingLastPathComponent().appendingPathComponent(".codex-global-state.json")
+        if isRunning() { throw PotetoError.running }
+        guard try PrivateFiles.snapshot(authURL) == document.authVersion,
+              try NativeStateFile.snapshot(stateURL) == document.stateVersion else { throw PotetoError.changed }
+        try PrivateFiles.directory(backupDirectory)
+        let backup = backupDirectory.appendingPathComponent("project-recovery-\(UUID().uuidString).json")
+        try PrivateFiles.write(document.data, to: backup, compare: true, limit: NativeStateFile.limit)
+        guard try PrivateFiles.read(backup, limit: NativeStateFile.limit) == document.data else { throw PotetoError.changed }
+        if isRunning() { throw PotetoError.running }
+        guard try PrivateFiles.snapshot(authURL) == document.authVersion,
+              try NativeStateFile.snapshot(stateURL) == document.stateVersion else { throw PotetoError.changed }
+        try NativeStateFile.write(output, to: stateURL, expected: document.stateVersion)
+        do {
+            guard !isRunning(), try PrivateFiles.snapshot(authURL) == document.authVersion,
+                  let after = try NativeStateFile.snapshot(stateURL),
+                  try NativeStateFile.read(stateURL, expected: after) == output else { throw PotetoError.projectPartial }
+        } catch { throw PotetoError.projectPartial }
+        return Result(restored: true, sourceSlot: chosen.report.slot, localProjects: counts.0, localAssignments: counts.1)
     }
 }
 

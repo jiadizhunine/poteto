@@ -1,5 +1,7 @@
 import Foundation
+import AppKit
 import Darwin
+import Security
 
 struct ActivationLedger: Codable {
     struct Boundary: Codable, Equatable {
@@ -65,14 +67,48 @@ final class ActivationCancellation: @unchecked Sendable {
     var cancelled: Bool { lock.lock(); defer { lock.unlock() }; return value }
 }
 
+enum NativeCodexCLI {
+    static func locate() throws -> URL {
+        try locate(
+            applications: [
+                URL(fileURLWithPath: "/Applications/ChatGPT.app", isDirectory: true),
+                FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/ChatGPT.app", isDirectory: true)
+            ],
+            registered: { NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex") }
+        )
+    }
+
+    static func locate(applications: [URL], registered: () -> URL?) throws -> URL {
+        var requirement: SecRequirement?
+        let rule = #"anchor apple generic and identifier "codex" and certificate leaf[subject.OU] = "2DC432GLL2""#
+        guard SecRequirementCreateWithString(rule as CFString, [], &requirement) == errSecSuccess,
+              let requirement else { throw PotetoError.nativeCLIUnavailable }
+        func verifiedCLI(in application: URL) -> URL? {
+            let app = application.resolvingSymlinksInPath()
+            let cli = app.appendingPathComponent("Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex")
+                .resolvingSymlinksInPath()
+            guard cli.path.hasPrefix(app.path + "/"), FileManager.default.isExecutableFile(atPath: cli.path) else { return nil }
+            var code: SecStaticCode?
+            guard SecStaticCodeCreateWithPath(cli as CFURL, [], &code) == errSecSuccess, let code,
+                  SecStaticCodeCheckValidity(code, [], requirement) == errSecSuccess else { return nil }
+            return cli
+        }
+        for app in applications {
+            if let cli = verifiedCLI(in: app) { return cli }
+        }
+        if let app = registered(), let cli = verifiedCLI(in: app) { return cli }
+        throw PotetoError.nativeCLIUnavailable
+    }
+}
+
 enum NativeActivation {
-    static let executable = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
     static let flags = ["shell_tool", "unified_exec", "multi_agent", "plugins", "apps", "code_mode", "browser_use", "computer_use", "image_generation", "remote_plugin"]
 
-    static func run(auth: AuthBundle, cancellation: ActivationCancellation, executable: String = executable, timeout: TimeInterval = 45, preflight: Bool = false) throws {
+    static func run(auth: AuthBundle, cancellation: ActivationCancellation, executable: String? = nil, timeout: TimeInterval = 45, preflight: Bool = false) throws {
         guard !cancellation.cancelled else { throw PotetoError.network }
         guard let access = try auth.token("access_token") else { throw PotetoError.loginRequired }
         let identity = try auth.identity
+        let cli = try executable.map { URL(fileURLWithPath: $0) } ?? NativeCodexCLI.locate()
         let scratch = URL(fileURLWithPath: "/private/tmp", isDirectory: true).resolvingSymlinksInPath().appendingPathComponent("poteto-activation-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: scratch) }
@@ -90,7 +126,7 @@ enum NativeActivation {
         """
         try Data(config.utf8).write(to: scratch.appendingPathComponent("config.toml"))
         let child = Process(), input = Pipe(), output = Pipe()
-        child.executableURL = URL(fileURLWithPath: executable); child.arguments = ["app-server", "--stdio"]
+        child.executableURL = cli; child.arguments = ["app-server", "--stdio"]
         child.currentDirectoryURL = scratch
         var env: [String: String] = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "CODEX_HOME": scratch.path, "TMPDIR": scratch.path]
         if let home = ProcessInfo.processInfo.environment["HOME"] { env["HOME"] = home }
@@ -176,7 +212,7 @@ enum NativeActivation {
                 if let method = frame["method"] as? String, method.hasPrefix("turn/") || method.hasPrefix("item/") { pending.append(frame) }
             }
         }
-        let initialization = try call("initialize", ["clientInfo": ["name": "poteto", "title": "poteto", "version": "1.0.1"], "capabilities": ["experimentalApi": true]])
+        let initialization = try call("initialize", ["clientInfo": ["name": "poteto", "title": "poteto", "version": "1.0.2"], "capabilities": ["experimentalApi": true]])
         guard (initialization["codexHome"] as? String).map({ URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath().path }) == scratch.standardizedFileURL.resolvingSymlinksInPath().path else { throw PotetoError.malformed }
         try send("initialized", [:], id: nil)
         let configResponse = try call("config/read", ["includeLayers": false])

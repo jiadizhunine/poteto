@@ -10,11 +10,11 @@
 
 <p align="center">Codex subscription usage and account management in your macOS menu bar</p>
 
-poteto shows usage and reset times for official Codex subscriptions and lets you save and switch between official accounts. It requires macOS 14 or later. Account switching uses the current macOS user's `~/.codex/auth.json`. Adding accounts and starting the usage timer use `/Applications/ChatGPT.app`.
+poteto shows usage and reset times for official Codex subscriptions and lets you save and switch between official accounts. It requires macOS 14 or later. Menu switching uses the current user's `~/.codex/auth.json`. Adding accounts and starting the usage timer use the CLI bundled with the official ChatGPT app, in the system or user Applications folder or another location registered with macOS.
 
 ## Install
 
-Download `poteto-v1.0.1-macos-universal.dmg` or `poteto-v1.0.1-macos-universal.zip` for v1.0.1 from [Releases](https://github.com/jiadizhunine/poteto/releases). Both packages include Apple Silicon and Intel binaries. Open the DMG or extract the ZIP, drag `poteto.app` to `/Applications` or `~/Applications`, and open it.
+Download `poteto-v1.0.2-macos-universal.dmg` or `poteto-v1.0.2-macos-universal.zip` for v1.0.2 from [Releases](https://github.com/jiadizhunine/poteto/releases). Both packages include Apple Silicon and Intel binaries. Open the DMG or extract the ZIP, drag `poteto.app` to `/Applications` or `~/Applications`, and open it.
 
 If macOS blocks the first launch, try opening the app, then go to **System Settings → Privacy & Security** and select **Open Anyway**. See [Apple's app-opening instructions](https://support.apple.com/en-us/102445).
 
@@ -36,7 +36,9 @@ When all ordinary usage windows are full and the reset timer has not started, po
 
 When switching, poteto merges local projects and thread assignments from the source account into the target account, preserving both accounts' projects, chat history, model, and reasoning settings.
 
-Sign in to a new account once in the native app, then quit it normally. Project inheritance applies to native local projects. Cloud projects remain managed by their original account. If project structures are incompatible or conflict, switching pauses and prompts you to resolve them.
+To bring local projects to a new account, sign in to that account once in the native app, then quit it normally. Cloud projects remain with their original account. poteto prompts you to check any project conflicts.
+
+If the project sidebar is empty after switching, recover local projects and thread assignments from an account layout saved on this Mac. Use `--project-status` to inspect layouts. Quit ChatGPT and Codex before running `--restore-projects`. [See the recovery steps](.agents/skills/poteto/references/project-recovery.md)
 
 Account credentials are stored in the macOS Keychain. Account display information and usage records are saved locally.
 
@@ -54,6 +56,8 @@ bash install.sh
 ```
 
 `install.sh` installs to `~/Applications/poteto.app` and enables launch at login.
+
+To have an agent install, maintain, or troubleshoot the app, invoke `$poteto` in this checkout. [Project skill](.agents/skills/poteto/SKILL.md)
 
 ## License
 

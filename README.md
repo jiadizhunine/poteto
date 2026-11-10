@@ -10,11 +10,11 @@
 
 <p align="center">macOS 菜单栏里的 Codex 订阅额度与账号管理工具</p>
 
-poteto 显示官方 Codex 订阅的额度与重置时间，支持保存多个官方账号并手动切换。需要 macOS 14 或更新版本。切换账号使用当前 macOS 用户的 `~/.codex/auth.json`。添加账号和启动额度计时使用 `/Applications/ChatGPT.app`。
+poteto 显示官方 Codex 订阅的额度与重置时间，支持保存多个官方账号并手动切换。需要 macOS 14 或更新版本。菜单切换使用当前用户的 `~/.codex/auth.json`。添加账号和启动额度计时使用官方 ChatGPT 应用内的 CLI，支持系统或用户的「应用程序」目录，以及系统已登记的安装位置。
 
 ## 安装
 
-在 [Releases](https://github.com/jiadizhunine/poteto/releases) 下载 v1.0.1 的 `poteto-v1.0.1-macos-universal.dmg` 或 `poteto-v1.0.1-macos-universal.zip`。两种安装包都包含 Apple Silicon 和 Intel 版本。打开 DMG 或解压 ZIP，将 `poteto.app` 拖到 `/Applications` 或 `~/Applications`，然后打开。
+在 [Releases](https://github.com/jiadizhunine/poteto/releases) 下载 v1.0.2 的 `poteto-v1.0.2-macos-universal.dmg` 或 `poteto-v1.0.2-macos-universal.zip`。两种安装包都包含 Apple Silicon 和 Intel 版本。打开 DMG 或解压 ZIP，将 `poteto.app` 拖到 `/Applications` 或 `~/Applications`，然后打开。
 
 首次打开若遇到 macOS 拦截，先尝试打开应用，再前往 **系统设置 → 隐私与安全性**，选择 **仍要打开**。详情见 [Apple 的打开应用说明](https://support.apple.com/en-us/102445)。
 
@@ -36,7 +36,9 @@ poteto 显示官方 Codex 订阅的额度与重置时间，支持保存多个官
 
 切换时，poteto 将来源账号的本地项目和会话归属合并到目标账号，保留双方项目、聊天历史、模型和档位设置。
 
-新账号先在原生应用中登录一次，再正常退出。项目继承适用于原生本地项目，云端项目仍由所属账号管理。项目结构不兼容或存在冲突时，切换会暂停并提示处理。
+要把本地项目带到新账号，先在原生应用中登录该账号一次，再正常退出。项目继承适用于本地项目，云端项目由所属账号管理。项目冲突时，poteto 会提示检查。
+
+切换后侧栏为空时，可以从本机已保存的账号分区恢复本地项目和聊天归属。用 `--project-status` 查看布局，完全退出 ChatGPT 和 Codex 后运行 `--restore-projects`。[查看恢复步骤](.agents/skills/poteto/references/project-recovery.md)
 
 账号凭据保存在 macOS 钥匙串中，账号显示信息和额度记录保存在本机。
 
@@ -54,6 +56,8 @@ bash install.sh
 ```
 
 `install.sh` 安装到 `~/Applications/poteto.app` 并启用登录时启动。
+
+想让 AI 帮你安装、维护或恢复项目，可以在仓库里调用 `$poteto`。[项目级 skill](.agents/skills/poteto/SKILL.md)
 
 ## 许可证
 
