@@ -25,7 +25,7 @@ class BundleTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"fixture")
         self.info = self.app / "Contents/Info.plist"
-        self.info.write_bytes(plistlib.dumps({"CFBundleIdentifier": "io.poteto.menubar", "CFBundleExecutable": "poteto", "CFBundleShortVersionString": "1.0.0", "LSMinimumSystemVersion": "14.0"}))
+        self.info.write_bytes(plistlib.dumps({"CFBundleIdentifier": "io.poteto.menubar", "CFBundleExecutable": "poteto", "CFBundleShortVersionString": "1.0.1", "LSMinimumSystemVersion": "14.0"}))
         self.slices = "arm64 x86_64"
         self.minimum = "14.0"
         self.calls = []
@@ -44,7 +44,7 @@ class BundleTests(unittest.TestCase):
 
     def test_valid_bundle_derives_artifact_and_verifies_signature(self):
         artifact = self.inspect()
-        self.assertEqual((artifact.version, artifact.slices, artifact.minimumOS), ("1.0.0", ("arm64", "x86_64"), "14.0"))
+        self.assertEqual((artifact.version, artifact.slices, artifact.minimumOS), ("1.0.1", ("arm64", "x86_64"), "14.0"))
         self.assertTrue(any(call[0].endswith("codesign") and "--strict" in call for call in self.calls))
 
     def test_rejects_wrong_slices_and_minimum(self):

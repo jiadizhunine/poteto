@@ -12,11 +12,11 @@
 
 ![poteto menu panel](assets/screenshot-menu-redacted.png)
 
-poteto shows usage and reset times for official Codex subscriptions and lets you save and switch between official accounts. It requires macOS 14 or later. Adding accounts and starting the usage timer require the official ChatGPT desktop app at `/Applications/ChatGPT.app`.
+poteto shows usage and reset times for official Codex subscriptions and lets you save and switch between official accounts. It requires macOS 14 or later. Account switching uses the current macOS user's `~/.codex/auth.json`. Adding accounts and starting the usage timer use `/Applications/ChatGPT.app`.
 
 ## Install
 
-Download `poteto-v1.0.0-macos-universal.dmg` or `poteto-v1.0.0-macos-universal.zip` for v1.0.0 from [Releases](https://github.com/jiadizhunine/poteto/releases). Both packages include Apple Silicon and Intel binaries. Open the DMG or extract the ZIP, drag `poteto.app` to `/Applications` or `~/Applications`, and open it.
+Download `poteto-v1.0.1-macos-universal.dmg` or `poteto-v1.0.1-macos-universal.zip` for v1.0.1 from [Releases](https://github.com/jiadizhunine/poteto/releases). Both packages include Apple Silicon and Intel binaries. Open the DMG or extract the ZIP, drag `poteto.app` to `/Applications` or `~/Applications`, and open it.
 
 If macOS blocks the first launch, try opening the app, then go to **System Settings → Privacy & Security** and select **Open Anyway**. See [Apple's app-opening instructions](https://support.apple.com/en-us/102445).
 

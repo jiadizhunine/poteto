@@ -574,7 +574,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     @objc private func addOrCancel() {
         guard !terminating, !(latest.loginRunning && login == nil) else { return }
         if login != nil { stopLogin(); return }
-        guard alert("添加一个官方账号", detail: "会打开 OpenAI 原生网页登录。登录在 poteto 的独立临时目录进行，不切换主 ChatGPT 的当前账号。", confirm: "打开登录") else { return }
+        guard alert("添加账号", detail: "", confirm: "打开登录") else { return }
         do {
             let executable = URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex")
             let home = supportURL.appendingPathComponent("login-\(UUID().uuidString)", isDirectory: true)
@@ -614,7 +614,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             } catch { if !terminating { _ = alert("未保存登录", detail: publicError(error)) } }
             if let home { try? FileManager.default.removeItem(at: home) }
             await monitor.setLoginRunning(false); latest = await monitor.snapshot(); render()
-            if saved && !terminating { refresh(force: true); _ = alert("账号已保存", detail: "已保存到本机钥匙串；主 ChatGPT 的当前登录没有更改。") }
+            if saved && !terminating { refresh(force: true); _ = alert("账号已添加", detail: "") }
         }
     }
 }

@@ -12,11 +12,11 @@
 
 ![poteto 菜单面板](assets/screenshot-menu-redacted.png)
 
-poteto 显示官方 Codex 订阅的额度与重置时间，支持保存多个官方账号并手动切换。需要 macOS 14 或更新版本；添加账号和启动额度计时需要将官方 ChatGPT 桌面应用安装在 `/Applications/ChatGPT.app`。
+poteto 显示官方 Codex 订阅的额度与重置时间，支持保存多个官方账号并手动切换。需要 macOS 14 或更新版本。切换账号使用当前 macOS 用户的 `~/.codex/auth.json`。添加账号和启动额度计时使用 `/Applications/ChatGPT.app`。
 
 ## 安装
 
-在 [Releases](https://github.com/jiadizhunine/poteto/releases) 下载 v1.0.0 的 `poteto-v1.0.0-macos-universal.dmg` 或 `poteto-v1.0.0-macos-universal.zip`。两种安装包都包含 Apple Silicon 和 Intel 版本。打开 DMG 或解压 ZIP，将 `poteto.app` 拖到 `/Applications` 或 `~/Applications`，然后打开。
+在 [Releases](https://github.com/jiadizhunine/poteto/releases) 下载 v1.0.1 的 `poteto-v1.0.1-macos-universal.dmg` 或 `poteto-v1.0.1-macos-universal.zip`。两种安装包都包含 Apple Silicon 和 Intel 版本。打开 DMG 或解压 ZIP，将 `poteto.app` 拖到 `/Applications` 或 `~/Applications`，然后打开。
 
 首次打开若遇到 macOS 拦截，先尝试打开应用，再前往 **系统设置 → 隐私与安全性**，选择 **仍要打开**。详情见 [Apple 的打开应用说明](https://support.apple.com/en-us/102445)。
 
