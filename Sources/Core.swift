@@ -834,6 +834,7 @@ enum NativeProjectState {
         guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { throw PotetoError.projectState }
         let rendererKey = "electron-account-renderer-state-v1"
         guard !root.keys.contains(where: { $0 != rendererKey && $0.hasPrefix("electron-account-renderer-state-") }) else { throw PotetoError.projectState }
+        guard root[rendererKey] == nil || root["electron-renderer-content-owner"] == nil else { throw PotetoError.projectState }
         func requireEmptyLayout() throws {
             for key in ["local-projects", "thread-project-assignments", "project-appearances", "project-files",
                         "sidebar-project-thread-orders", "thread-workspace-root-hints", "thread-projectless-output-directories",
@@ -851,6 +852,10 @@ enum NativeProjectState {
             }
         }
         guard let renderer = root[rendererKey] else {
+            if let contentOwner = root["electron-renderer-content-owner"] {
+                guard safeLabel(contentOwner) != nil else { throw PotetoError.projectState }
+                return nil
+            }
             try requireEmptyLayout()
             return nil
         }

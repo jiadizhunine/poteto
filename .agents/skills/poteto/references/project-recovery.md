@@ -1,5 +1,7 @@
 # Recover the local project sidebar
 
+Current ChatGPT versions use a shared local project layout marked by `electron-renderer-content-owner`. poteto v1.0.5 supports credential switching with this layout. Inspect its projects in the native app. The recovery commands below apply to older profiles with `electron-account-renderer-state-v1`.
+
 Use poteto v1.0.2 or later. Find the installed bundle and inspect the current layout:
 
 ```sh

@@ -60,6 +60,19 @@ struct MonitorTests {
         check(switched.accounts.first(where: { $0.current })?.subscriptionTitle == "fixture", "usage plan takes priority in the monitor snapshot")
         let decoded = try JSONDecoder().decode(Snapshot.self, from: JSONEncoder().encode(switched))
         check(decoded.accounts.map(\.plan) == switched.accounts.map(\.plan), "status serialization retains the account plans without credentials")
+        let sharedStateURL = folder.appendingPathComponent(".codex-global-state.json")
+        let sharedState = Data("""
+        {"electron-renderer-content-owner":"fixture-content-owner","local-projects":{"local-project":{"id":"local-project","name":"Fixture","rootPaths":["/synthetic/project"],"createdAt":1,"updatedAt":2,"chatGptBacking":{"projectId":"fixture-cloud"}}},"thread-project-assignments":{"fixture-thread":{"projectKind":"local","projectId":"local-project"}},"precision":1.2345678901234567890123456789}
+        """.utf8)
+        try sharedState.write(to: sharedStateURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: sharedStateURL.path)
+        let sharedStore = FakeVault(initial)
+        let sharedMonitor = Monitor(authURL: authFile, statusURL: status, load: { sharedStore.value }, save: sharedStore.save,
+                                    read: { _ in use }, running: { false })
+        let sharedSwitched = try await sharedMonitor.switchAccount(a.identity.id)
+        check(try sharedSwitched.accounts.first(where: { $0.current })?.id == a.identity.id, "menu switch selects the destination with the native shared layout")
+        check(try Data(contentsOf: sharedStateURL) == sharedState, "menu switch keeps native shared projects and precision byte for byte")
+        try FileManager.default.removeItem(at: sharedStateURL)
 
         try PrivateFiles.write(a.data, to: authFile)
         let updated = try bundle("a@example.invalid", refresh: "fixture-new-native", refreshed: "2026-10-11T01:00:00Z")

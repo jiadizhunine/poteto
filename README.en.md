@@ -14,7 +14,7 @@ poteto shows usage and reset times for official Codex subscriptions and lets you
 
 ## Install
 
-Download `poteto-v1.0.4-macos-universal.dmg` or `poteto-v1.0.4-macos-universal.zip` for v1.0.4 from [Releases](https://github.com/jiadizhunine/poteto/releases). Both packages include Apple Silicon and Intel binaries. Open the DMG or extract the ZIP, drag `poteto.app` to `/Applications` or `~/Applications`, and open it.
+Download `poteto-v1.0.5-macos-universal.dmg` or `poteto-v1.0.5-macos-universal.zip` for v1.0.5 from [Releases](https://github.com/jiadizhunine/poteto/releases). Both packages include Apple Silicon and Intel binaries. Open the DMG or extract the ZIP, drag `poteto.app` to `/Applications` or `~/Applications`, and open it.
 
 If macOS blocks the first launch, try opening the app, then go to **System Settings → Privacy & Security** and select **Open Anyway**. See [Apple's app-opening instructions](https://support.apple.com/en-us/102445).
 
@@ -34,11 +34,11 @@ Manage launch at login in settings. After moving the app, enable launch at login
 
 When all ordinary usage windows are full and the reset timer has not started, poteto sends one short message with that account's default model in a separate session to start the timer, at most once per period. The test consumes a small amount of subscription usage.
 
-When you switch to an account that ChatGPT has already initialized, poteto merges local projects and thread assignments automatically. The destination keeps its existing project names, appearances, order, and thread assignments. Switching preserves both accounts' projects, chat history, model, and reasoning settings.
+Current ChatGPT versions share the local project layout. poteto switches the login credentials, and the native client retains local projects and thread assignments.
 
-To bring local projects to a new account, sign in to the destination account once in ChatGPT. Quit ChatGPT and Codex. In poteto, switch to the account with the projects, then switch to the destination account. Cloud projects stay with their original account. poteto flags conflicting project folders.
+For older ChatGPT versions with separate account layouts, poteto adds missing local projects and thread assignments while keeping the destination's organization. Before bringing projects to an account for the first time, sign in to it once in ChatGPT, then quit ChatGPT and Codex. Cloud projects stay with their original account.
 
-If the project sidebar is empty after switching, recover local projects and thread assignments from an account layout saved on this Mac. Use `--project-status` to inspect layouts. Quit ChatGPT and Codex before running `--restore-projects`. [See the recovery steps](.agents/skills/poteto/references/project-recovery.md)
+For an empty sidebar in an older account layout, use `--project-status` to inspect saved sources. Quit ChatGPT and Codex before running `--restore-projects`. For the newer shared layout, inspect projects directly in ChatGPT. [See the recovery steps](.agents/skills/poteto/references/project-recovery.md)
 
 Account credentials are stored in the macOS Keychain. Account display information and usage records are saved locally.
 

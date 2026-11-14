@@ -138,6 +138,31 @@ struct ProjectRetentionTests {
             precondition(try! Data(contentsOf: stateURL) == fresh)
         }
         try rejected(json(globals("a")))
+        var shared = globals("a")
+        var sharedProject = project("a")
+        sharedProject["chatGptBacking"] = ["projectId": "fixture-cloud-backing"]
+        shared["local-projects"] = ["a": sharedProject]
+        for owner in ["fixture-content-owner", "signed-out"] {
+            shared["electron-renderer-content-owner"] = owner
+            let sharedData = try json(shared)
+            try write(a.data, authURL); try write(sharedData, stateURL, 0o644)
+            try activateAccount(b, authURL: authURL, isRunning: { false })
+            precondition(try! Data(contentsOf: authURL) == b.data)
+            precondition(try! Data(contentsOf: stateURL) == sharedData)
+            try activateAccount(a, authURL: authURL, isRunning: { false })
+            precondition(try! Data(contentsOf: authURL) == a.data)
+            precondition(try! Data(contentsOf: stateURL) == sharedData)
+        }
+        for invalidOwner in [NSNull(), "", 1, true] as [Any] {
+            shared["electron-renderer-content-owner"] = invalidOwner
+            try rejected(json(shared))
+        }
+        shared["electron-renderer-content-owner"] = "fixture-content-owner"
+        shared["electron-account-renderer-state-v2"] = [:] as [String: Any]
+        try rejected(json(shared))
+        var mixedSchema = state()
+        mixedSchema["electron-renderer-content-owner"] = "fixture-content-owner"
+        try rejected(json(mixedSchema))
         var empty = state()
         for field in ["local-projects", "project-order", "sidebar-project-thread-orders", "thread-project-assignments", "project-appearances"] { empty.removeValue(forKey: field) }
         try write(a.data, authURL); try write(json(empty), stateURL, 0o644)
