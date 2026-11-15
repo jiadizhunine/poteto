@@ -8,8 +8,11 @@ func check(_ condition: @autoclosure () throws -> Bool, _ description: String) t
 func rejected(_ description: String, _ action: () throws -> Void) throws {
     do { try action(); fatalError("not rejected: \(description)") } catch { checks += 1 }
 }
-func fixtureAuth(_ email: String, workspace: String = "fixture-workspace", refresh: String = "fixture-refresh", refreshed: String = "2026-10-11T12:00:00Z") throws -> AuthBundle {
-    let claims: [String: Any] = ["email": email, "sub": "fixture-user", "https://api.openai.com/auth": ["chatgpt_account_id": workspace, "chatgpt_plan_type": "pro"]]
+func fixtureAuth(_ email: String, workspace: String = "fixture-workspace", refresh: String = "fixture-refresh", refreshed: String = "2026-10-11T12:00:00Z", subscriptionExpiry: Any? = nil, tokenExpiry: Int? = nil) throws -> AuthBundle {
+    var namespace: [String: Any] = ["chatgpt_account_id": workspace, "chatgpt_plan_type": "pro"]
+    if let subscriptionExpiry { namespace["chatgpt_subscription_active_until"] = subscriptionExpiry }
+    var claims: [String: Any] = ["email": email, "sub": "fixture-user", "https://api.openai.com/auth": namespace]
+    if let tokenExpiry { claims["exp"] = tokenExpiry }
     let payload = try JSONSerialization.data(withJSONObject: claims).base64EncodedString().replacingOccurrences(of: "=", with: "").replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
     let d: [String: Any] = ["auth_mode": "chatgpt", "tokens": ["id_token": "e30.\(payload).c2ln", "access_token": "fixture-access", "refresh_token": refresh, "account_id": workspace], "last_refresh": refreshed, "unknown_native_field": ["keep": true]]
     return AuthBundle(data: try JSONSerialization.data(withJSONObject: d, options: .sortedKeys))
@@ -25,6 +28,23 @@ defer { try? FileManager.default.removeItem(at: folder) }
 let a = try fixtureAuth("a@example.invalid"), b = try fixtureAuth("b@example.invalid")
 try check(a.identity.email == "a@example.invalid", "identity")
 try check(a.identity.id != b.identity.id, "identity separation")
+let expiryDate = Date(timeIntervalSince1970: 1_900_000_000)
+let dated = try fixtureAuth("a@example.invalid", subscriptionExpiry: "2030-03-17T17:46:40Z", tokenExpiry: 1_800_000_000)
+try check(dated.identity.subscriptionExpiresAt == expiryDate, "official subscription expiry is parsed")
+try check(try fixtureAuth("a@example.invalid", subscriptionExpiry: "2030-03-17T17:46:40.250Z").identity.subscriptionExpiresAt == expiryDate.addingTimeInterval(0.25),
+          "fractional ISO subscription expiry is parsed")
+try check(dated.identity.id == a.identity.id, "subscription expiry does not change account identity")
+for invalid: Any in [NSNull(), true, 1_900_000_000, "invalid", "", ["date": "2030-03-17T17:46:40Z"]] {
+    let auth = try fixtureAuth("a@example.invalid", subscriptionExpiry: invalid, tokenExpiry: 1_800_000_000)
+    try check(auth.identity.subscriptionExpiresAt == nil, "invalid subscription expiry remains unknown")
+}
+try check(try fixtureAuth("a@example.invalid", tokenExpiry: 1_800_000_000).identity.subscriptionExpiresAt == nil,
+          "token expiry is not used as subscription expiry")
+let oldIdentity = Data("{\"id\":\"fixture\",\"email\":\"fixture@example.invalid\",\"workspace\":\"fixture\",\"plan\":\"pro\"}".utf8)
+try check(try JSONDecoder().decode(Identity.self, from: oldIdentity).subscriptionExpiresAt == nil,
+          "old identity without subscription expiry still decodes")
+try check(try JSONDecoder().decode(Identity.self, from: JSONEncoder().encode(dated.identity)) == dated.identity,
+          "identity serialization retains subscription expiry")
 try rejected("missing identity") { _ = try AuthBundle(data: Data("{}".utf8)).identity }
 var mismatch = try a.document, tokens = mismatch["tokens"] as! [String: Any]; tokens["account_id"] = "other-workspace"; mismatch["tokens"] = tokens
 try rejected("workspace mismatch") { _ = try AuthBundle(data: JSONSerialization.data(withJSONObject: mismatch)).identity }
@@ -33,6 +53,9 @@ try check(vault.accounts.count == 2, "migrate accounts")
 try vault.put(a, fromNative: true); try check(vault.accounts.count == 2, "deduplicate")
 let rotated = try a.replacingTokens(["access_token": "fixture-new-access", "refresh_token": "fixture-new-refresh"])
 try check(rotated.identity.id == a.identity.id, "refresh identity retained")
+let datedRotation = try a.replacingTokens(["access_token": "fixture-new-access", "id_token": dated.token("id_token")!])
+try check(datedRotation.identity.id == a.identity.id && datedRotation.identity.subscriptionExpiresAt == expiryDate,
+          "token rotation keeps identity while updating subscription expiry")
 try check((rotated.document["unknown_native_field"] as? [String: Bool])?["keep"] == true, "unknown native field retained")
 try vault.put(rotated); try vault.put(a, fromNative: true)
 try check(vault.accounts[0].auth.token("refresh_token") == "fixture-new-refresh", "do not restore stale native refresh")

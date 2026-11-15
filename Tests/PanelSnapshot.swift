@@ -13,7 +13,7 @@ struct PanelSnapshot {
         let usage = Usage(plan: "pro", windows: [UsageWindow(label: "Codex", durationMinutes: 10080, remaining: 33, reset: later, ordinary: true)], checkedAt: Date(),
                           credits: CreditBalance(balance: "56509.1182155", unlimited: false, expiresAt: nil),
                           resetAllowance: ResetAllowance(availableCount: 2, applicableCount: 2, credits: [ResetCredit(id: "fixture-reset", title: "额度重置", expiresAt: later)]))
-        state.snapshot = Snapshot(accounts: [AccountView(id: "fixture-current", email: "current@example.invalid", workspace: "fixture", current: true, plan: "pro", usage: usage, error: nil),
+        state.snapshot = Snapshot(accounts: [AccountView(id: "fixture-current", email: "current@example.invalid", workspace: "fixture", current: true, plan: "pro", usage: usage, error: nil, subscriptionExpiresAt: Date(timeIntervalSince1970: 2_208_988_800)),
             AccountView(id: "fixture-other", email: "other@example.invalid", workspace: "fixture", current: false, plan: "free", usage: nil, error: nil)], refreshing: false, error: nil, loginRunning: false)
         if CommandLine.arguments.contains("--details") { state.previewAccount("fixture-current") }
         state.settings = CommandLine.arguments.contains("--settings")

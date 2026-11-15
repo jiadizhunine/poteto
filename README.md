@@ -14,7 +14,7 @@ poteto 显示官方 Codex 订阅的额度与重置时间，支持保存多个官
 
 ## 安装
 
-在 [Releases](https://github.com/jiadizhunine/poteto/releases) 下载 v1.0.5 的 `poteto-v1.0.5-macos-universal.dmg` 或 `poteto-v1.0.5-macos-universal.zip`。两种安装包都包含 Apple Silicon 和 Intel 版本。打开 DMG 或解压 ZIP，将 `poteto.app` 拖到 `/Applications` 或 `~/Applications`，然后打开。
+在 [Releases](https://github.com/jiadizhunine/poteto/releases) 下载 v1.0.6 的 `poteto-v1.0.6-macos-universal.dmg` 或 `poteto-v1.0.6-macos-universal.zip`。两种安装包都包含 Apple Silicon 和 Intel 版本。打开 DMG 或解压 ZIP，将 `poteto.app` 拖到 `/Applications` 或 `~/Applications`，然后打开。
 
 首次打开若遇到 macOS 拦截，先尝试打开应用，再前往 **系统设置 → 隐私与安全性**，选择 **仍要打开**。详情见 [Apple 的打开应用说明](https://support.apple.com/en-us/102445)。
 
@@ -24,7 +24,7 @@ poteto 显示官方 Codex 订阅的额度与重置时间，支持保存多个官
 
 1. 打开 poteto，点击菜单栏中的 🥔。
 2. 选择 **添加账号**，在官方登录页面登录。
-3. 查看套餐、额度、重置时间和接口返回的余额或重置券信息。poteto 每 5 分钟刷新一次，读取失败会单独标记。
+3. 查看套餐、订阅有效期、额度、重置时间和接口返回的余额或重置券信息。额度每 5 分钟刷新一次，订阅日期随登录凭据更新，读取失败会单独标记。
 4. 切换账号前，正常退出 ChatGPT 和 Codex，再选择目标账号。
 
 <p align="center">

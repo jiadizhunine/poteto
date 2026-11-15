@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Darwin
+import Vision
 
 @main
 @MainActor
@@ -47,6 +48,7 @@ struct PanelInteractionTests {
         try check(account("pro").subscriptionTitle == "Pro", "Pro does not imply a particular price or monthly allowance")
         let old = Data("{\"id\":\"fixture\",\"email\":\"fixture@example.invalid\",\"workspace\":\"fixture\",\"current\":false}".utf8)
         try check(try JSONDecoder().decode(AccountView.self, from: old).subscriptionTitle == "待确认", "old status without plan still decodes")
+        try check(try JSONDecoder().decode(AccountView.self, from: old).subscriptionExpiresAt == nil, "old status without subscription expiry still decodes")
     }
 
     static func previewTests() throws {
@@ -423,6 +425,57 @@ struct PanelInteractionTests {
         }
     }
 
+    static func subscriptionRenderingTests() throws {
+        let expiry = Date(timeIntervalSince1970: 1_900_000_000)
+        func renderedRows(identityPlan: String, usagePlan: String) throws -> [(String, CGFloat)] {
+            let state = PanelState()
+            state.availableScreenSize = NSSize(width: 800, height: 600)
+            let usage = Usage(plan: usagePlan, windows: [], checkedAt: expiry,
+                resetAllowance: ResetAllowance(availableCount: 1, applicableCount: 1,
+                    credits: [ResetCredit(id: "fixture-reset", title: "额度重置", expiresAt: expiry)]))
+            let account = AccountView(id: "fixture", email: "fixture@example.invalid", workspace: "fixture", current: true,
+                plan: identityPlan, usage: usage, error: "测试错误", activationNote: "激活提示", subscriptionExpiresAt: expiry)
+            state.snapshot = Snapshot(accounts: [account], refreshing: false, error: nil, loginRunning: false)
+            state.previewAccount(account.id)
+            let hosting = NSHostingView(rootView: PotetoPanel(state: state, refresh: {}, addAccount: {},
+                switchAccount: { _ in }, forget: { _ in }, toggleStart: {}, quit: {}))
+            let window = window()
+            defer { window.close() }
+            window.contentView = hosting
+            hosting.sizingOptions = [.intrinsicContentSize]
+            hosting.layoutSubtreeIfNeeded()
+            window.setContentSize(hosting.fittingSize)
+            hosting.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+            guard let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
+                throw Failure(description: "cannot capture subscription fixture")
+            }
+            hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+            guard let image = bitmap.cgImage else { throw Failure(description: "cannot read subscription fixture") }
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.recognitionLanguages = ["zh-Hans", "en-US"]
+            request.usesLanguageCorrection = false
+            try VNImageRequestHandler(cgImage: image).perform([request])
+            return (request.results ?? []).compactMap { row in
+                row.topCandidates(1).first.map { ($0.string.replacingOccurrences(of: " ", with: ""), row.boundingBox.midY) }
+            }
+        }
+        let paid = try renderedRows(identityPlan: "free", usagePlan: "pro")
+        func position(_ label: String, in rows: [(String, CGFloat)]) -> CGFloat? {
+            rows.first(where: { $0.0.contains(label) })?.1
+        }
+        guard let reset = position("额度重置", in: paid), let subscription = position("订阅到期", in: paid),
+              let activation = position("激活提示", in: paid), let error = position("测试错误", in: paid) else {
+            throw Failure(description: "subscription fixture rows missing: \(paid.map(\.0))")
+        }
+        try check(reset > subscription && subscription > activation && activation > error,
+                  "paid subscription expiry renders after reset credits and before activation and error")
+        let free = try renderedRows(identityPlan: "pro", usagePlan: "free")
+        try check(position("额度重置", in: free) != nil && position("订阅到期", in: free) == nil,
+                  "current Free usage hides a stale Pro subscription expiry")
+    }
+
     static func main() async {
         do {
             _ = NSApplication.shared
@@ -435,6 +488,7 @@ struct PanelInteractionTests {
             let themes = try themeTests()
             try boundsTests()
             try hostingTests(themes)
+            try subscriptionRenderingTests()
             print("poteto: \(checks) panel interaction/theme/bounds checks passed")
             print("poteto: fixture state/layout/identity checked; AX button presses and disclosure-arrow visibility were not measured")
             print("poteto: animation smoothness, real event-monitor delivery, and production modal alerts were not measured")

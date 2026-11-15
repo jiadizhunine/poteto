@@ -331,6 +331,10 @@ struct PotetoPanel: View {
                     }
                 }
             } else { Text(state.snapshot.refreshing ? "正在查询…" : "尚无额度结果") }
+            if account.subscriptionTitle != "Free", let date = account.subscriptionExpiresAt {
+                Text("订阅到期：\(deadlineText(date))")
+                    .font(.caption).foregroundStyle(Color(theme.ink).opacity(0.6)).fixedSize(horizontal: false, vertical: true)
+            }
             if let note = account.activationNote { Text(note).font(.caption).foregroundStyle(Color(theme.ink).opacity(0.6)).fixedSize(horizontal: false, vertical: true) }
             if let error = account.error { Text(error).foregroundStyle(Color(theme.accent)).fixedSize(horizontal: false, vertical: true) }
             action("切换到此账号…", "arrow.triangle.2.circlepath", disabled: state.nativeRunning || state.busy || state.snapshot.refreshing || state.snapshot.loginRunning) { switchAccount(account.id) }

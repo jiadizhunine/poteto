@@ -27,8 +27,10 @@ actor Counter {
     var count = 0
     func increment() { count += 1 }
 }
-func bundle(_ email: String, refresh: String = "fixture-refresh", refreshed: String = "2026-10-11T00:00:00Z") throws -> AuthBundle {
-    let c: [String: Any] = ["email": email, "sub": "fixture", "https://api.openai.com/auth": ["chatgpt_account_id": "fixture", "chatgpt_plan_type": "pro"]]
+func bundle(_ email: String, refresh: String = "fixture-refresh", refreshed: String = "2026-10-11T00:00:00Z", subscriptionExpiry: String? = nil) throws -> AuthBundle {
+    var namespace: [String: Any] = ["chatgpt_account_id": "fixture", "chatgpt_plan_type": "pro"]
+    if let subscriptionExpiry { namespace["chatgpt_subscription_active_until"] = subscriptionExpiry }
+    let c: [String: Any] = ["email": email, "sub": "fixture", "https://api.openai.com/auth": namespace]
     let p = try JSONSerialization.data(withJSONObject: c).base64EncodedString().replacingOccurrences(of: "=", with: "").replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
     return AuthBundle(data: try JSONSerialization.data(withJSONObject: ["auth_mode": "chatgpt", "tokens": ["id_token": "e30.\(p).c2ln", "access_token": "fixture-access", "refresh_token": refresh, "account_id": "fixture"], "last_refresh": refreshed], options: .sortedKeys))
 }
@@ -75,16 +77,24 @@ struct MonitorTests {
         try FileManager.default.removeItem(at: sharedStateURL)
 
         try PrivateFiles.write(a.data, to: authFile)
-        let updated = try bundle("a@example.invalid", refresh: "fixture-new-native", refreshed: "2026-10-11T01:00:00Z")
+        let updated = try bundle("a@example.invalid", refresh: "fixture-new-native", refreshed: "2026-10-11T01:00:00Z", subscriptionExpiry: "2030-03-17T17:46:40Z")
         let saveStore = FakeVault(initial)
         let retryMonitor = Monitor(authURL: authFile, statusURL: status, load: { saveStore.value }, save: saveStore.save, read: { _ in use }, running: { false })
-        _ = await retryMonitor.snapshot(); saveStore.failures = 1
+        let beforeUpdate = await retryMonitor.snapshot(); saveStore.failures = 1
+        check(beforeUpdate.accounts.first(where: { $0.current })?.subscriptionExpiresAt == nil,
+              "missing native subscription expiry stays absent")
         try PrivateFiles.write(updated.data, to: authFile)
         let failed = await retryMonitor.snapshot()
         check(failed.error != nil, "failed capture is reported")
         check(saveStore.value.accounts[0].auth == a, "failed capture must not commit only in memory")
-        _ = await retryMonitor.snapshot()
+        let retried = await retryMonitor.snapshot()
         check(saveStore.value.accounts[0].auth == updated, "next capture retries Keychain save")
+        let current = retried.accounts.first(where: { $0.current })
+        check(try current?.id == a.identity.id && current?.subscriptionExpiresAt == Date(timeIntervalSince1970: 1_900_000_000),
+              "updated native auth publishes subscription expiry on the same account")
+        let updatedStatus = try JSONDecoder().decode(Snapshot.self, from: JSONEncoder().encode(retried))
+        check(updatedStatus.accounts.first(where: { $0.current })?.subscriptionExpiresAt == current?.subscriptionExpiresAt,
+              "status serialization retains subscription expiry")
 
         try PrivateFiles.write(a.data, to: authFile)
         let rotated = try b.replacingTokens(["refresh_token": "fixture-rotated", "access_token": "fixture-new-access"])

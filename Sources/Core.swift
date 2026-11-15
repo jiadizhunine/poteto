@@ -40,6 +40,7 @@ struct Identity: Codable, Equatable, Sendable {
     let email: String
     let workspace: String
     let plan: String?
+    var subscriptionExpiresAt: Date? = nil
 }
 
 struct NativeAccountDescriptor: Equatable {
@@ -102,7 +103,9 @@ struct AuthBundle: Codable, Equatable, Sendable {
             guard let workspace = claimed ?? selected, safeLabel(workspace) != nil else { throw PotetoError.invalidAuth }
             let email = safeLabel(claims["email"]) ?? subject
             let idData = try JSONSerialization.data(withJSONObject: [email.lowercased(), workspace])
-            return Identity(id: idData.base64EncodedString(), email: email, workspace: workspace, plan: safeLabel(namespace["chatgpt_plan_type"], max: 60))
+            return Identity(id: idData.base64EncodedString(), email: email, workspace: workspace,
+                            plan: safeLabel(namespace["chatgpt_plan_type"], max: 60),
+                            subscriptionExpiresAt: serviceDate(namespace["chatgpt_subscription_active_until"] as? String))
         }
     }
     var refreshedAt: Date? {

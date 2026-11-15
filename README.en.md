@@ -14,7 +14,7 @@ poteto shows usage and reset times for official Codex subscriptions and lets you
 
 ## Install
 
-Download `poteto-v1.0.5-macos-universal.dmg` or `poteto-v1.0.5-macos-universal.zip` for v1.0.5 from [Releases](https://github.com/jiadizhunine/poteto/releases). Both packages include Apple Silicon and Intel binaries. Open the DMG or extract the ZIP, drag `poteto.app` to `/Applications` or `~/Applications`, and open it.
+Download `poteto-v1.0.6-macos-universal.dmg` or `poteto-v1.0.6-macos-universal.zip` for v1.0.6 from [Releases](https://github.com/jiadizhunine/poteto/releases). Both packages include Apple Silicon and Intel binaries. Open the DMG or extract the ZIP, drag `poteto.app` to `/Applications` or `~/Applications`, and open it.
 
 If macOS blocks the first launch, try opening the app, then go to **System Settings → Privacy & Security** and select **Open Anyway**. See [Apple's app-opening instructions](https://support.apple.com/en-us/102445).
 
@@ -24,7 +24,7 @@ Manage launch at login in settings. After moving the app, enable launch at login
 
 1. Open poteto and click 🥔 in the menu bar.
 2. Select **添加账号** (Add account) and sign in on the official login page.
-3. View the plan, usage, reset times, and any balance or reset credits returned by the service. poteto refreshes every 5 minutes and marks failed reads separately.
+3. View the plan, subscription validity date, usage, reset times, and any balance or reset credits returned by the service. Usage refreshes every 5 minutes, the subscription date updates with the login credentials, and failed reads are marked separately.
 4. Before switching accounts, quit ChatGPT and Codex normally, then select the target account.
 
 <p align="center">

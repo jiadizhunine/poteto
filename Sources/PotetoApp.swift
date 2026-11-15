@@ -17,6 +17,7 @@ struct AccountView: Codable, Sendable {
     let usage: Usage?
     let error: String?
     var activationNote: String? = nil
+    var subscriptionExpiresAt: Date? = nil
     var subscriptionTitle: String {
         guard let value = safeLabel(usage?.plan ?? plan, max: 60) else { return "待确认" }
         return ["free": "Free", "go": "Go", "plus": "Plus", "pro": "Pro", "team": "Team",
@@ -100,7 +101,8 @@ actor Monitor {
             guard let identity = try? saved.auth.identity else { return nil }
             return AccountView(id: identity.id, email: identity.email, workspace: identity.workspace,
                                current: identity.id == currentID, plan: identity.plan,
-                               usage: usages[identity.id], error: errors[identity.id], activationNote: activationNotes[identity.id])
+                               usage: usages[identity.id], error: errors[identity.id], activationNote: activationNotes[identity.id],
+                               subscriptionExpiresAt: identity.subscriptionExpiresAt)
         }.sorted { ($0.current ? 0 : 1, $0.email) < ($1.current ? 0 : 1, $1.email) }
         return Snapshot(accounts: accounts, refreshing: refreshing, error: lastError, loginRunning: loginRunning)
     }
