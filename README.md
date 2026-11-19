@@ -14,7 +14,7 @@ poteto 显示官方 Codex 订阅的额度与重置时间，支持保存多个官
 
 ## 安装
 
-在 [Releases](https://github.com/jiadizhunine/poteto/releases) 下载 v1.0.6 的 `poteto-v1.0.6-macos-universal.dmg` 或 `poteto-v1.0.6-macos-universal.zip`。两种安装包都包含 Apple Silicon 和 Intel 版本。打开 DMG 或解压 ZIP，将 `poteto.app` 拖到 `/Applications` 或 `~/Applications`，然后打开。
+在 [Releases](https://github.com/jiadizhunine/poteto/releases) 下载 v1.0.7 的 `poteto-v1.0.7-macos-universal.dmg` 或 `poteto-v1.0.7-macos-universal.zip`。两种安装包都包含 Apple Silicon 和 Intel 版本。打开 DMG 或解压 ZIP，将 `poteto.app` 拖到 `/Applications` 或 `~/Applications`，然后打开。
 
 首次打开若遇到 macOS 拦截，先尝试打开应用，再前往 **系统设置 → 隐私与安全性**，选择 **仍要打开**。详情见 [Apple 的打开应用说明](https://support.apple.com/en-us/102445)。
 
@@ -34,9 +34,11 @@ poteto 显示官方 Codex 订阅的额度与重置时间，支持保存多个官
 
 当所有普通额度窗口满额且重置计时尚未启动时，poteto 会用该账号的默认模型，在独立会话中发送一条短消息启动计时，每周期至多一次。测试消耗少量订阅额度。
 
-当前 ChatGPT 使用共享的本地项目布局。poteto 切换登录凭据，项目和聊天归属由原生客户端保留。
+采用共享布局的 ChatGPT 桌面版会在换号时保留本机项目和聊天归属。云端项目归所属账号管理。
 
-使用旧版 ChatGPT 的账号分区布局时，poteto 会自动补齐目标账号缺少的本地项目和聊天归属，并保留目标账号已有的整理。首次把项目带到一个账号时，先在 ChatGPT 登录该账号一次，然后完全退出 ChatGPT 和 Codex。云端项目归所属账号管理。
+在 ChatGPT 桌面版 `26.1111.21308` 和 `26.1111.71704` 上，poteto 会在 ChatGPT 退出后或通过 poteto 切号时补齐旧聊天缺失的 `@` 引用记录。恢复范围是曾启用原生引用的未归档本机聊天。打开 poteto，然后完全退出并重新打开 ChatGPT 即可。系统已有 `zstd` 时，poteto 也能从压缩日志读取引用记录。
+
+使用旧版 ChatGPT 的账号分区布局时，poteto 会自动补齐目标账号缺少的本地项目和聊天归属，并保留目标账号已有的整理。首次把项目带到一个账号时，先在 ChatGPT 登录该账号一次，然后完全退出 ChatGPT 和 Codex。
 
 旧版账号分区布局中侧栏为空时，可以用 `--project-status` 查看已保存的来源。完全退出 ChatGPT 和 Codex 后运行 `--restore-projects`。新版共享布局直接在 ChatGPT 中检查项目。[查看恢复步骤](.agents/skills/poteto/references/project-recovery.md)
 

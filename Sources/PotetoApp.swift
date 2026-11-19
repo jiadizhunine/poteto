@@ -45,6 +45,7 @@ actor Monitor {
     private let readbackUsage: (AuthBundle) async throws -> Usage
     private let renewAuth: (AuthBundle) async throws -> AuthBundle
     private let isNativeRunning: () -> Bool
+    private let syncChatReferences: () -> Bool
     private var vault = Vault()
     private var loaded = false
     private var usages: [String: Usage] = [:]
@@ -66,6 +67,7 @@ actor Monitor {
          readback: ((AuthBundle) async throws -> Usage)? = nil,
          renew: @escaping (AuthBundle) async throws -> AuthBundle = OfficialHTTP.refresh,
          running: @escaping () -> Bool = nativeClientIsRunning,
+         syncChatReferences: @escaping () -> Bool = { false },
          activationURL: URL? = nil,
          activate: @escaping @Sendable (AuthBundle, ActivationCancellation) async -> Bool = { auth, cancellation in
              await Task.detached(priority: .utility) { (try? NativeActivation.run(auth: auth, cancellation: cancellation)) != nil }.value
@@ -76,6 +78,7 @@ actor Monitor {
         readUsage = read ?? OfficialHTTP.readUsage
         readbackUsage = readback ?? read ?? OfficialHTTP.readUsageOnly
         renewAuth = renew; isNativeRunning = running
+        self.syncChatReferences = syncChatReferences
     }
     private func flush() throws {
         if dirty { try saveVault(vault); dirty = false }
@@ -241,8 +244,15 @@ actor Monitor {
         guard try PrivateFiles.read(authURL) == before else { throw PotetoError.changed }
         try capture()
         guard try vault.accounts.first(where: { try $0.auth.identity.id == id })?.auth == auth else { throw PotetoError.changed }
-        try withProjectStateLock(in: statusURL.deletingLastPathComponent()) {
+        let support = statusURL.deletingLastPathComponent()
+        try withProjectStateLock(in: support) {
             try activateAccount(auth, authURL: authURL, isRunning: isNativeRunning)
+            if syncChatReferences() {
+                do {
+                    try NativeChatReferences.apply(profile: authURL.deletingLastPathComponent(),
+                                                   support: support, isRunning: isNativeRunning)
+                } catch { NativeChatReferences.reportSkipped() }
+            }
         }
         usages[id] = usage; errors[id] = nil
         try capture()
@@ -399,6 +409,7 @@ func potetoIcon() -> NSImage {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let monitor: Monitor
+    private let syncChatReferences: Bool
     private var item: NSStatusItem!
     private let popover = NSPopover()
     private let panel = PanelState()
@@ -414,6 +425,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var localClickMonitor: Any?
     private var globalClickMonitor: Any?
     private var startupTask: Task<Void, Never>?
+    private var desktopApplications: NSKeyValueObservation?
+    private var referenceExitTask: Task<Void, Never>?
 
 #if POTETO_TEST
     private var presentationTheme: () -> DesktopTheme = DesktopTheme.load
@@ -422,8 +435,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var presentationScreen: (() -> NSSize)?
 #endif
 
-    init(monitor: Monitor = Monitor()) {
+    init(monitor: Monitor = Monitor(), syncChatReferences: Bool = false) {
         self.monitor = monitor
+        self.syncChatReferences = syncChatReferences
         super.init()
     }
 
@@ -438,12 +452,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         item.button?.target = self; item.button?.action = #selector(togglePanel)
         popover.behavior = .transient
         popover.delegate = self
+        if syncChatReferences {
+            desktopApplications = NSWorkspace.shared.observe(\.runningApplications, options: [.old, .new]) { [weak self] _, change in
+                let desktopID = NativeChatReferences.desktopBundleID
+                let wasRunning = change.oldValue?.contains { $0.bundleIdentifier == desktopID } == true
+                let remainsRunning = change.newValue?.contains { $0.bundleIdentifier == desktopID } == true
+                guard wasRunning && !remainsRunning else { return }
+                Task { @MainActor [weak self] in self?.reconcileChatReferences(waitForChildExit: true) }
+            }
+            NativeChatReferences.observerReady()
+            reconcileChatReferences(waitForChildExit: false)
+        }
         render(); refresh(force: true)
         timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in Task { @MainActor in self?.refresh() } }
         timer?.tolerance = 30
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(wake), name: NSWorkspace.didWakeNotification, object: nil)
     }
     @objc private func wake() { refresh() }
+    private func reconcileChatReferences(waitForChildExit: Bool) {
+        guard !terminating else { return }
+        referenceExitTask?.cancel()
+        referenceExitTask = Task.detached(priority: .utility) {
+            guard NativeChatReferences.available() else { return }
+            let delays = waitForChildExit ? [0, 75, 175, 350, 600] : [0]
+            for delay in delays {
+                do {
+                    if delay > 0 { try await Task.sleep(for: .milliseconds(delay)) }
+                    try Task.checkCancellation()
+                    if nativeClientIsRunning() { continue }
+                    try withProjectStateLock(in: supportURL) { () throws -> Void in
+                        try NativeChatReferences.apply(profile: nativeHome, support: supportURL) {
+                            Task.isCancelled || nativeClientIsRunning()
+                        }
+                    }
+                    return
+                } catch is CancellationError { return }
+                catch PotetoError.running { continue }
+                catch PotetoError.changed { continue }
+                catch { NativeChatReferences.reportSkipped(); return }
+            }
+        }
+    }
+
     private func refresh(force: Bool = false) {
         guard !terminating, refreshTask == nil, !switching, login == nil else { return }
         refreshTask = Task { [weak self] in
@@ -619,6 +669,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         return .terminateLater
     }
     func applicationWillTerminate(_ notification: Notification) {
+        desktopApplications?.invalidate()
+        referenceExitTask?.cancel()
         timer?.invalidate(); stopPanelClickMonitors()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
@@ -703,8 +755,18 @@ extension AppDelegate {
 @main
 struct Poteto {
     static func main() {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments == ["--chat-reference-status"] {
+            do {
+                let status = try NativeChatReferences.available() ? NativeChatReferences.check(profile: nativeHome) : nil
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys]
+                FileHandle.standardOutput.write(try encoder.encode(status) + Data("\n".utf8))
+                return
+            } catch { fputs("\(publicError(error))\n", stderr); exit(1) }
+        }
         do {
-            if let result = try ProjectCommand.run(Array(CommandLine.arguments.dropFirst())) {
+            if let result = try ProjectCommand.run(arguments) {
                 FileHandle.standardOutput.write(result + Data("\n".utf8))
                 return
             }
@@ -754,7 +816,10 @@ struct Poteto {
                         print("migrated \(vault.accounts.count) official accounts to local Keychain")
                         return
                     }
-                    let app = NSApplication.shared; let delegate = AppDelegate(); app.delegate = delegate
+                    let app = NSApplication.shared
+                    let monitor = Monitor(syncChatReferences: NativeChatReferences.available)
+                    let delegate = AppDelegate(monitor: monitor, syncChatReferences: true)
+                    app.delegate = delegate
                     withExtendedLifetime(delegate) { app.run() }
                 } catch { fputs("\(publicError(error))\n", stderr); exit(1) }
             }

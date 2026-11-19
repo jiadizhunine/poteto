@@ -21,14 +21,14 @@ name="poteto-v${version}-macos-universal"
 zip="$output/$name.zip"
 dmg="$output/$name.dmg"
 [ ! -e "$zip" ] && [ ! -L "$zip" ] && [ ! -e "$dmg" ] && [ ! -L "$dmg" ] || { echo 'Release artifact already exists' >&2; exit 1; }
-/usr/bin/ditto -c -k --sequesterRsrc --keepParent "$work/poteto.app" "$work/release.zip"
+/usr/bin/ditto -c -k --norsrc --noqtn --keepParent "$work/poteto.app" "$work/release.zip"
 /bin/mkdir "$work/zip-check"
 /usr/bin/ditto -x -k "$work/release.zip" "$work/zip-check"
 /usr/bin/python3 Tools/release_artifact.py --root "$work/zip-check" zip
 [ "$(inspect "$work/zip-check/poteto.app")" = "$expected" ] || { echo 'ZIP app metadata mismatch' >&2; exit 1; }
 /usr/bin/python3 Tools/release_artifact.py --compare "$work/poteto.app" "$work/zip-check/poteto.app"
 /bin/mkdir "$work/dmg-root"
-/usr/bin/ditto "$work/poteto.app" "$work/dmg-root/poteto.app"
+/usr/bin/ditto --norsrc --noqtn "$work/poteto.app" "$work/dmg-root/poteto.app"
 /bin/ln -s /Applications "$work/dmg-root/Applications"
 /usr/bin/hdiutil create -quiet -fs HFS+ -volname poteto -srcfolder "$work/dmg-root" -format UDZO "$work/release.dmg"
 /usr/bin/hdiutil verify -quiet "$work/release.dmg"

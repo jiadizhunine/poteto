@@ -46,8 +46,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleExecutable</key><string>poteto</string>
 <key>CFBundleIconFile</key><string>poteto.icns</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.0.6</string>
-<key>CFBundleVersion</key><string>7</string>
+<key>CFBundleShortVersionString</key><string>1.0.7</string>
+<key>CFBundleVersion</key><string>10</string>
 <key>LSUIElement</key><true/>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
@@ -58,13 +58,13 @@ if [ "$release" = 1 ]; then
     /usr/bin/swiftc -swift-version 5 -O -parse-as-library -target "$arch-apple-macosx14.0" \
       -file-prefix-map "$HOME=/private-home" -debug-prefix-map "$HOME=/private-home" \
       -file-prefix-map "$PWD=/poteto" -debug-prefix-map "$PWD=/poteto" \
-      Sources/Core.swift Sources/Activation.swift Sources/Panel.swift Sources/PotetoApp.swift \
+      Sources/Core.swift Sources/Activation.swift Sources/ChatReferences.swift Sources/Panel.swift Sources/PotetoApp.swift \
       -framework AppKit -framework SwiftUI -framework Security -framework LocalAuthentication -o "$staging/poteto-$arch"
   done
   /usr/bin/lipo -create "$staging/poteto-arm64" "$staging/poteto-x86_64" -output "$app/Contents/MacOS/poteto"
   /bin/rm -f "$staging/poteto-arm64" "$staging/poteto-x86_64"
 else
-  /usr/bin/swiftc -swift-version 5 -O -parse-as-library Sources/Core.swift Sources/Activation.swift Sources/Panel.swift Sources/PotetoApp.swift -framework AppKit -framework SwiftUI -framework Security -framework LocalAuthentication -o "$app/Contents/MacOS/poteto"
+  /usr/bin/swiftc -swift-version 5 -O -parse-as-library Sources/Core.swift Sources/Activation.swift Sources/ChatReferences.swift Sources/Panel.swift Sources/PotetoApp.swift -framework AppKit -framework SwiftUI -framework Security -framework LocalAuthentication -o "$app/Contents/MacOS/poteto"
 fi
 /usr/bin/swift Tools/Icon.swift "$staging/poteto.iconset"
 /usr/bin/iconutil --convert icns "$staging/poteto.iconset" --output "$app/Contents/Resources/poteto.icns"

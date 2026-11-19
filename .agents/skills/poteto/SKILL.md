@@ -1,6 +1,6 @@
 ---
 name: poteto
-description: Use when installing or updating the poteto macOS menu bar app, troubleshooting its Codex account or quota features, or recovering local project layouts after an account switch.
+description: Use when installing or updating the poteto macOS menu bar app, troubleshooting its Codex account, quota, or chat reference features, or recovering local project layouts after an account switch.
 ---
 
 # poteto
@@ -10,3 +10,5 @@ For installation, use the current [GitHub release](https://github.com/jiadizhuni
 Read [components and paths](references/components.md) to find the installed app, sign-in state, launch item, or source module. Use the menu to refresh quota or add an account. For a rejected credential, have the user sign in again through the app that owns it. Leave login and Keychain prompts to the user.
 
 Read [project recovery](references/project-recovery.md) when switching fails or the local project sidebar is empty. Start with the read-only `--project-status` command. Use poteto's restore command for a compatible saved layout after the user has quit ChatGPT and Codex. Keep credential files, account IDs, and private paths out of reports and public issues.
+
+For missing `@` chat references, find the supported desktop versions in the README. With poteto running, quit and reopen ChatGPT after any tasks finish. Run `--chat-reference-status` to check aggregate counts for initialized accounts, eligible local chats, and missing reference records.

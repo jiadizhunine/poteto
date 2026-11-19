@@ -339,7 +339,7 @@ func parseResetDetails(_ data: Data, summary: ResetAllowance, identity: Identity
     let count = allowanceCount(raw["available_count"] ?? raw["availableCount"]) ?? summary.availableCount
     return ResetAllowance(availableCount: count, applicableCount: summary.applicableCount.flatMap { $0 <= count ? $0 : nil }, credits: credits)
 }
-private struct UniqueJSONKeys {
+struct UniqueJSONKeys {
     let bytes: [UInt8]
     var index = 0
     mutating func whitespace() { while index < bytes.count && [9, 10, 13, 32].contains(bytes[index]) { index += 1 } }
@@ -385,7 +385,7 @@ private struct UniqueJSONKeys {
         while true {
             whitespace(); guard index < bytes.count, bytes[index] == 34 else { throw PotetoError.projectState }
             let key = try string(); whitespace()
-            guard index < bytes.count, bytes[index] == 58 else { throw PotetoError.projectState }
+            guard result[key] == nil, index < bytes.count, bytes[index] == 58 else { throw PotetoError.projectState }
             index += 1; whitespace(); let start = index; try value(); result[key] = start..<index
             whitespace(); guard index < bytes.count else { throw PotetoError.projectState }
             let separator = bytes[index]; index += 1
@@ -1081,14 +1081,16 @@ enum NativeStateFile {
         while true { let n = Darwin.read(fd, &buffer, buffer.count); if n == 0 { break }; guard n > 0, data.count + n <= limit else { throw PotetoError.projectState }; data.append(contentsOf: buffer.prefix(n)) }
         guard fstat(fd, &s) == 0, PrivateSnapshot(s) == expected, try snapshot(url) == expected else { throw PotetoError.changed }; return data
     }
-    static func write(_ data: Data, to url: URL, expected: PrivateSnapshot) throws {
+    static func write(_ data: Data, to url: URL, expected: PrivateSnapshot, beforeCommit: () throws -> Void = {}) throws {
         guard data.count <= limit, try snapshot(url) == expected else { throw PotetoError.changed }
         var s = stat(); guard lstat(url.path, &s) == 0, PrivateSnapshot(s) == expected else { throw PotetoError.changed }
         let temp = url.deletingLastPathComponent().appendingPathComponent(".poteto-\(UUID().uuidString).tmp")
         let fd = open(temp.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else { throw PotetoError.projectState }; defer { close(fd); unlink(temp.path) }
         try data.withUnsafeBytes { raw in var offset = 0; while offset < raw.count { let n = Darwin.write(fd, raw.baseAddress!.advanced(by: offset), raw.count - offset); guard n > 0 else { throw PotetoError.projectState }; offset += n } }
-        guard fchmod(fd, s.st_mode & 0o777) == 0, fsync(fd) == 0, try snapshot(url) == expected else { throw PotetoError.changed }
+        guard fchmod(fd, s.st_mode & 0o777) == 0, fsync(fd) == 0 else { throw PotetoError.changed }
+        try beforeCommit()
+        guard try snapshot(url) == expected else { throw PotetoError.changed }
         guard rename(temp.path, url.path) == 0 else { throw PotetoError.projectState }
         let directory = open(url.deletingLastPathComponent().path, O_RDONLY | O_CLOEXEC)
         guard directory >= 0 else { throw PotetoError.projectPartial }

@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import SQLite3
 
 final class FakeVault {
     var value: Vault
@@ -75,6 +76,7 @@ struct MonitorTests {
         check(try sharedSwitched.accounts.first(where: { $0.current })?.id == a.identity.id, "menu switch selects the destination with the native shared layout")
         check(try Data(contentsOf: sharedStateURL) == sharedState, "menu switch keeps native shared projects and precision byte for byte")
         try FileManager.default.removeItem(at: sharedStateURL)
+        checks += try await checkChatReferenceSwitches(in: folder, accounts: [a, b, c], usage: use)
 
         try PrivateFiles.write(a.data, to: authFile)
         let updated = try bundle("a@example.invalid", refresh: "fixture-new-native", refreshed: "2026-10-11T01:00:00Z", subscriptionExpiry: "2030-03-17T17:46:40Z")
@@ -348,5 +350,109 @@ struct MonitorTests {
         let panelSource = try String(contentsOfFile: "Sources/Panel.swift", encoding: .utf8)
         check(!panelSource.contains("退出 ChatGPT/Codex 后可切换") && !panelSource.contains("关于 poteto"), "unrequested explanatory text removed")
         print("poteto: \(checks) lifecycle/concurrency/theme checks passed")
+    }
+
+    private static func checkChatReferenceSwitches(in folder: URL, accounts: [AuthBundle], usage: Usage) async throws -> Int {
+        let profile = folder.appendingPathComponent("reference-profile")
+        let support = folder.appendingPathComponent("reference-support")
+        let sessions = profile.appendingPathComponent("sessions")
+        for path in [profile, support, sessions] { try PrivateFiles.directory(path) }
+        let auth = profile.appendingPathComponent("auth.json")
+        let globalState = profile.appendingPathComponent(".codex-global-state.json")
+        let dbPath = profile.appendingPathComponent("state_5.sqlite")
+        let backup = support.appendingPathComponent("chat-references-before-update.json")
+        let transcript = Data("{\"text\":\"existing history\"}\n".utf8)
+        let threadIDs = (0...10).map { "00000000-0000-4000-8000-" + String(format: "%012lld", Int64($0)) }
+        let keys = threadIDs.map { "thread-reference-capability:" + $0 }
+        let hostMap = "\"thread-project-membership-host-ids\":{\"\(threadIDs[5])\":\"remote-host\"}"
+        let emptyAccount = "\"electron-owner-atoms:c\":{\"local-document-identity\":{\"accountId\":\"c\",\"userId\":\"fixture-user\"}"
+        let before = """
+        {
+          "electron-renderer-content-owner":"a",
+          "electron-owner-atoms:a":{"\(keys[0])":true,"\(keys[2])":true,"\(keys[4])":true,"\(keys[5])":true,"\(keys[6])":true,"\(keys[7])":true, "unrelated":1.2345678901234567890123456789 },
+          "electron-owner-atoms:b":{"\(keys[1])":true,"\(keys[2])":false},
+          \(emptyAccount)},
+          "electron-owner-atoms:signed-out":{},
+          \(hostMap),
+          "local-projects":{"retained":{}},"thread-project-assignments":{"retained":{}}
+        }
+        """
+        let repaired = before
+            .replacingOccurrences(of: "6789 },", with: "6789 ,\"\(keys[1])\":true,\"\(keys[3])\":true,\"\(keys[8])\":true,\"\(keys[10])\":true},")
+            .replacingOccurrences(of: "\"\(keys[2])\":false},", with: "\"\(keys[2])\":false,\"\(keys[0])\":true,\"\(keys[3])\":true,\"\(keys[8])\":true,\"\(keys[10])\":true},")
+            .replacingOccurrences(of: "\(emptyAccount)},",
+                with: "\(emptyAccount),\"\(keys[0])\":true,\"\(keys[1])\":true,\"\(keys[2])\":true,\"\(keys[3])\":true,\"\(keys[8])\":true,\"\(keys[10])\":true},")
+        let original = Data(before.utf8)
+        let expected = Data(repaired.utf8)
+        try PrivateFiles.write(original, to: globalState)
+        do {
+            var db: OpaquePointer?
+            guard sqlite3_open(dbPath.path, &db) == SQLITE_OK else { throw PotetoError.privateFile }
+            defer { sqlite3_close(db) }
+            let schema = """
+            CREATE TABLE threads(id TEXT PRIMARY KEY, rollout_path TEXT, archived INTEGER, originator TEXT,
+                thread_source TEXT, model_provider TEXT, attached_thread_parent_id TEXT);
+            CREATE TABLE thread_dynamic_tools(thread_id TEXT, name TEXT);
+            INSERT INTO thread_dynamic_tools VALUES ('\(threadIDs[3])', 'read_thread'), ('\(threadIDs[8])', 'read_thread');
+            """
+            guard sqlite3_exec(db, schema, nil, nil, nil) == SQLITE_OK else { throw PotetoError.projectState }
+            for (index, id) in threadIDs.enumerated() {
+                let file = sessions.appendingPathComponent("rollout-\(id).jsonl")
+                if index == 9 || index == 10 {
+                    let sourceID = index == 9 ? threadIDs[8] : id
+                    let header = """
+                    {"type":"session_meta","payload":{"id":"\(sourceID)","dynamic_tools":[{"type":"namespace","tools":[{"name":"read_thread"}]}]}}
+                    """
+                    try PrivateFiles.write(Data((header + "\n").utf8) + transcript, to: file)
+                } else if index != 6 {
+                    try PrivateFiles.write(transcript, to: index == 3 ? file.appendingPathExtension("zst") : file)
+                }
+                let archived = index == 4 ? 1 : 0
+                let parent = index == 7 ? "'attached-parent'" : "NULL"
+                let escapedPath = file.path.replacingOccurrences(of: "'", with: "''")
+                let row = "INSERT INTO threads VALUES ('\(id)', '\(escapedPath)', \(archived), 'Codex Desktop', 'user', 'openai', \(parent))"
+                guard sqlite3_exec(db, row, nil, nil, nil) == SQLITE_OK else { throw PotetoError.projectState }
+            }
+        }
+        let chatFile = sessions.appendingPathComponent("rollout-\(threadIDs[0]).jsonl")
+        let dbBytes = try Data(contentsOf: dbPath)
+
+        var count = 0
+        func verify(_ condition: Bool, _ message: String) { precondition(condition, message); count += 1 }
+        let preview = try NativeChatReferences.check(profile: profile)
+        verify(preview == .init(accounts: 3, chats: 6, missingRecords: 14), "native evidence can repair a known account with no surviving flags")
+        do {
+            try NativeChatReferences.apply(profile: profile, support: support, isRunning: { true })
+            preconditionFailure("active desktop must prohibit any repair")
+        } catch PotetoError.running { count += 1 }
+        verify(try PrivateFiles.read(backup) == nil && PrivateFiles.read(globalState) == original, "active desktop writes no backup or state")
+        var processChecks = 0
+        do {
+            try NativeChatReferences.apply(profile: profile, support: support) {
+                processChecks += 1
+                return processChecks == 3
+            }
+            preconditionFailure("desktop relaunch during staging must prohibit commit")
+        } catch PotetoError.running { count += 1 }
+        verify(try PrivateFiles.read(globalState) == original, "late process check preserves native state")
+
+        var vault = Vault()
+        for account in accounts { try vault.put(account) }
+        try PrivateFiles.write(accounts[0].data, to: auth)
+        let store = FakeVault(vault)
+        let monitor = Monitor(authURL: auth, statusURL: support.appendingPathComponent("status.json"),
+                              load: { store.value }, save: store.save, read: { _ in usage },
+                              running: { false }, syncChatReferences: { true })
+        for account in [accounts[1], accounts[2], accounts[0]] {
+            let switched = try await monitor.switchAccount(account.identity.id)
+            verify(try switched.accounts.count == 3 && switched.accounts.first(where: \.current)?.id == account.identity.id,
+                   "original account-switch route selects the requested account")
+            verify(try PrivateFiles.read(globalState) == expected, "switch restores only missing chat flags and leaves every other byte untouched")
+            verify(try PrivateFiles.read(auth) == account.data, "reference repair does not alter the chosen account credentials")
+        }
+        verify(try PrivateFiles.read(backup) == original, "repeat switches preserve the rollback copy")
+        verify(try NativeChatReferences.check(profile: profile)?.missingRecords == 0, "verified switches have no eligible missing flags")
+        verify(try Data(contentsOf: dbPath) == dbBytes && Data(contentsOf: chatFile) == transcript, "index and chat content are byte-identical after all switches")
+        return count
     }
 }
